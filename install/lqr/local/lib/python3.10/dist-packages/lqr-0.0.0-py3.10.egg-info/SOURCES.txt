@@ -1,0 +1,7 @@
+setup.cfg
+setup.py
+lqr/__init__.py
+lqr.egg-info/PKG-INFO
+lqr.egg-info/SOURCES.txt
+lqr.egg-info/dependency_links.txt
+lqr.egg-info/top_level.txt

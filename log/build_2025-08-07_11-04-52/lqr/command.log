@@ -1,0 +1,6 @@
+Invoking command in '/home/ugrp/f1tenth_ws/build/lqr': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/ugrp/f1tenth_ws/src/f1tenth-software-stack/lqr -DCMAKE_INSTALL_PREFIX=/home/ugrp/f1tenth_ws/install/lqr
+Invoked command in '/home/ugrp/f1tenth_ws/build/lqr' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/ugrp/f1tenth_ws/src/f1tenth-software-stack/lqr -DCMAKE_INSTALL_PREFIX=/home/ugrp/f1tenth_ws/install/lqr
+Invoking command in '/home/ugrp/f1tenth_ws/build/lqr': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/ugrp/f1tenth_ws/build/lqr -- -j16 -l16
+Invoked command in '/home/ugrp/f1tenth_ws/build/lqr' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/ugrp/f1tenth_ws/build/lqr -- -j16 -l16
+Invoking command in '/home/ugrp/f1tenth_ws/build/lqr': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/ugrp/f1tenth_ws/build/lqr
+Invoked command in '/home/ugrp/f1tenth_ws/build/lqr' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/ugrp/f1tenth_ws/build/lqr

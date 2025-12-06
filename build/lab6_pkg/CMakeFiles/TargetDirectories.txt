@@ -1,0 +1,12 @@
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/uninstall.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/lab6_pkg_uninstall.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/ament_cmake_python_copy_lab6_pkg.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/ament_cmake_python_copy_lab6_pkg_setup.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/ament_cmake_python_build_lab6_pkg_egg.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/test.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/edit_cache.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/rebuild_cache.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/list_install_components.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/install.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/install/local.dir
+/home/ugrp/f1tenth_ws/build/lab6_pkg/CMakeFiles/install/strip.dir

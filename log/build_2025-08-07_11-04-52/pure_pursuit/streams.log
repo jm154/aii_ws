@@ -1,0 +1,96 @@
+[0.166s] Invoking command in '/home/ugrp/f1tenth_ws/build/pure_pursuit': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/ugrp/f1tenth_ws/src/f1tenth-software-stack/pure_pursuit -DCMAKE_INSTALL_PREFIX=/home/ugrp/f1tenth_ws/install/pure_pursuit
+[0.339s] -- The C compiler identification is GNU 11.4.0
+[0.339s] -- The CXX compiler identification is GNU 11.4.0
+[0.339s] -- Detecting C compiler ABI info
+[0.339s] -- Detecting C compiler ABI info - done
+[0.339s] -- Check for working C compiler: /usr/bin/cc - skipped
+[0.339s] -- Detecting C compile features
+[0.339s] -- Detecting C compile features - done
+[0.339s] -- Detecting CXX compiler ABI info
+[0.350s] -- Detecting CXX compiler ABI info - done
+[0.356s] -- Check for working CXX compiler: /usr/bin/c++ - skipped
+[0.357s] -- Detecting CXX compile features
+[0.357s] -- Detecting CXX compile features - done
+[0.358s] -- Found ament_cmake: 1.3.12 (/opt/ros/humble/share/ament_cmake/cmake)
+[0.461s] -- Found Python3: /usr/bin/python3 (found version "3.10.12") found components: Interpreter 
+[0.521s] -- Found rclcpp: 16.0.14 (/opt/ros/humble/share/rclcpp/cmake)
+[0.543s] -- Found rosidl_generator_c: 3.1.7 (/opt/ros/humble/share/rosidl_generator_c/cmake)
+[0.546s] -- Found rosidl_adapter: 3.1.7 (/opt/ros/humble/share/rosidl_adapter/cmake)
+[0.551s] -- Found rosidl_generator_cpp: 3.1.7 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)
+[0.557s] -- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+[0.567s] -- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+[0.596s] -- Found rmw_implementation_cmake: 6.1.2 (/opt/ros/humble/share/rmw_implementation_cmake/cmake)
+[0.597s] -- Found rmw_fastrtps_cpp: 6.2.8 (/opt/ros/humble/share/rmw_fastrtps_cpp/cmake)
+[0.654s] -- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found version "3.0.2")  
+[0.672s] -- Found FastRTPS: /opt/ros/humble/include  
+[0.698s] -- Using RMW implementation 'rmw_fastrtps_cpp' as default
+[0.703s] -- Looking for pthread.h
+[0.757s] -- Looking for pthread.h - found
+[0.757s] -- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+[0.807s] -- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+[0.808s] -- Found Threads: TRUE  
+[0.838s] -- Found rclpy: 3.3.17 (/opt/ros/humble/share/rclpy/cmake)
+[0.839s] -- Found geometry_msgs: 4.9.0 (/opt/ros/humble/share/geometry_msgs/cmake)
+[0.849s] -- Found nav_msgs: 4.9.0 (/opt/ros/humble/share/nav_msgs/cmake)
+[0.858s] -- Found ackermann_msgs: 2.0.2 (/opt/ros/humble/share/ackermann_msgs/cmake)
+[0.865s] -- Found sensor_msgs: 4.9.0 (/opt/ros/humble/share/sensor_msgs/cmake)
+[0.877s] -- Found visualization_msgs: 4.9.0 (/opt/ros/humble/share/visualization_msgs/cmake)
+[0.895s] -- Found tf2_ros: 0.25.15 (/opt/ros/humble/share/tf2_ros/cmake)
+[1.000s] -- Found ament_lint_auto: 0.12.14 (/opt/ros/humble/share/ament_lint_auto/cmake)
+[1.050s] -- Added test 'copyright' to check source files copyright and LICENSE
+[1.051s] -- Added test 'flake8' to check Python code syntax and style conventions
+[1.052s] -- Added test 'lint_cmake' to check CMake code style
+[1.052s] -- Added test 'pep257' to check Python code against some of the docstring style conventions in PEP 257
+[1.053s] -- Added test 'xmllint' to check XML markup files
+[1.053s] -- Configuring done
+[1.058s] -- Generating done
+[1.060s] -- Build files have been written to: /home/ugrp/f1tenth_ws/build/pure_pursuit
+[1.068s] Invoked command in '/home/ugrp/f1tenth_ws/build/pure_pursuit' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/ugrp/f1tenth_ws/src/f1tenth-software-stack/pure_pursuit -DCMAKE_INSTALL_PREFIX=/home/ugrp/f1tenth_ws/install/pure_pursuit
+[1.070s] Invoking command in '/home/ugrp/f1tenth_ws/build/pure_pursuit': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/ugrp/f1tenth_ws/build/pure_pursuit -- -j16 -l16
+[1.114s] Built target ament_cmake_python_copy_pure_pursuit
+[1.117s] Built target ament_cmake_python_copy_pure_pursuit_setup
+[1.258s] /home/ugrp/.local/lib/python3.10/site-packages/setuptools/dist.py:717: UserWarning: Usage of dash-separated 'script-dir' will not be supported in future versions. Please use the underscore name 'script_dir' instead
+[1.258s]   warnings.warn(
+[1.258s] /home/ugrp/.local/lib/python3.10/site-packages/setuptools/dist.py:717: UserWarning: Usage of dash-separated 'install-scripts' will not be supported in future versions. Please use the underscore name 'install_scripts' instead
+[1.258s]   warnings.warn(
+[1.270s] running egg_info
+[1.270s] creating pure_pursuit.egg-info
+[1.270s] writing pure_pursuit.egg-info/PKG-INFO
+[1.270s] writing dependency_links to pure_pursuit.egg-info/dependency_links.txt
+[1.270s] writing top-level names to pure_pursuit.egg-info/top_level.txt
+[1.270s] writing manifest file 'pure_pursuit.egg-info/SOURCES.txt'
+[1.271s] reading manifest file 'pure_pursuit.egg-info/SOURCES.txt'
+[1.272s] writing manifest file 'pure_pursuit.egg-info/SOURCES.txt'
+[1.291s] Built target ament_cmake_python_build_pure_pursuit_egg
+[1.299s] Invoked command in '/home/ugrp/f1tenth_ws/build/pure_pursuit' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/ugrp/f1tenth_ws/build/pure_pursuit -- -j16 -l16
+[1.299s] Invoking command in '/home/ugrp/f1tenth_ws/build/pure_pursuit': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/ugrp/f1tenth_ws/build/pure_pursuit
+[1.304s] -- Install configuration: ""
+[1.304s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/environment/pythonpath.sh
+[1.304s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/environment/pythonpath.dsv
+[1.304s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/local/lib/python3.10/dist-packages/pure_pursuit-0.0.0-py3.10.egg-info
+[1.304s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/local/lib/python3.10/dist-packages/pure_pursuit-0.0.0-py3.10.egg-info/top_level.txt
+[1.304s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/local/lib/python3.10/dist-packages/pure_pursuit-0.0.0-py3.10.egg-info/SOURCES.txt
+[1.304s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/local/lib/python3.10/dist-packages/pure_pursuit-0.0.0-py3.10.egg-info/dependency_links.txt
+[1.304s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/local/lib/python3.10/dist-packages/pure_pursuit-0.0.0-py3.10.egg-info/PKG-INFO
+[1.305s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/local/lib/python3.10/dist-packages/pure_pursuit
+[1.305s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/local/lib/python3.10/dist-packages/pure_pursuit/__init__.py
+[1.324s] Listing '/home/ugrp/f1tenth_ws/install/pure_pursuit/local/lib/python3.10/dist-packages/pure_pursuit'...
+[1.324s] Compiling '/home/ugrp/f1tenth_ws/install/pure_pursuit/local/lib/python3.10/dist-packages/pure_pursuit/__init__.py'...
+[1.327s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/lib/pure_pursuit/pure_pursuit_node.py
+[1.327s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/lib/pure_pursuit/final_race_pure_pursuit_node.py
+[1.327s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/ament_index/resource_index/package_run_dependencies/pure_pursuit
+[1.327s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/ament_index/resource_index/parent_prefix_path/pure_pursuit
+[1.327s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/environment/ament_prefix_path.sh
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/environment/ament_prefix_path.dsv
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/environment/path.sh
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/environment/path.dsv
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/local_setup.bash
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/local_setup.sh
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/local_setup.zsh
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/local_setup.dsv
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/package.dsv
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/ament_index/resource_index/packages/pure_pursuit
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/cmake/pure_pursuitConfig.cmake
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/cmake/pure_pursuitConfig-version.cmake
+[1.328s] -- Installing: /home/ugrp/f1tenth_ws/install/pure_pursuit/share/pure_pursuit/package.xml
+[1.333s] Invoked command in '/home/ugrp/f1tenth_ws/build/pure_pursuit' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/ugrp/f1tenth_ws/build/pure_pursuit

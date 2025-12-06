@@ -1,0 +1,6 @@
+Invoking command in '/home/ugrp/f1tenth_ws/build/pure_pursuit': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/ugrp/f1tenth_ws/src/f1tenth-software-stack/pure_pursuit -DCMAKE_INSTALL_PREFIX=/home/ugrp/f1tenth_ws/install/pure_pursuit
+Invoked command in '/home/ugrp/f1tenth_ws/build/pure_pursuit' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake /home/ugrp/f1tenth_ws/src/f1tenth-software-stack/pure_pursuit -DCMAKE_INSTALL_PREFIX=/home/ugrp/f1tenth_ws/install/pure_pursuit
+Invoking command in '/home/ugrp/f1tenth_ws/build/pure_pursuit': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/ugrp/f1tenth_ws/build/pure_pursuit -- -j16 -l16
+Invoked command in '/home/ugrp/f1tenth_ws/build/pure_pursuit' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --build /home/ugrp/f1tenth_ws/build/pure_pursuit -- -j16 -l16
+Invoking command in '/home/ugrp/f1tenth_ws/build/pure_pursuit': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/ugrp/f1tenth_ws/build/pure_pursuit
+Invoked command in '/home/ugrp/f1tenth_ws/build/pure_pursuit' returned '0': CMAKE_PREFIX_PATH=/opt/ros/humble /usr/bin/cmake --install /home/ugrp/f1tenth_ws/build/pure_pursuit

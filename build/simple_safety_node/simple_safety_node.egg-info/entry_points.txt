@@ -1,0 +1,3 @@
+[console_scripts]
+simple_safety_node = simple_safety_node.simple_safety_node:main
+

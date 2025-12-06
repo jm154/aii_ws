@@ -1,0 +1,7 @@
+setup.cfg
+setup.py
+mpc/__init__.py
+mpc.egg-info/PKG-INFO
+mpc.egg-info/SOURCES.txt
+mpc.egg-info/dependency_links.txt
+mpc.egg-info/top_level.txt

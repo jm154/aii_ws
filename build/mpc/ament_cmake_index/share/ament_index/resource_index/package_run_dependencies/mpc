@@ -1,0 +1,1 @@
+rclcpp;rclpy;std_msgs;sensor_msgs;ackermann_msgs;geometry_msgs;visualization_msgs;Eigen3;tf2_ros;python3-cvxpy-pip;python3-numba;ament_lint_auto;ament_lint_common
