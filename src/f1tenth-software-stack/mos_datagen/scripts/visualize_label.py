@@ -8,7 +8,7 @@ from sklearn.cluster import DBSCAN
 from matplotlib import cm
 
 # ⭐️ 라벨링된 데이터 경로
-DATA_DIR = os.path.expanduser("../dataset_vel_label") # 경로 확인 필요
+DATA_DIR = os.path.expanduser("../dataset_l/4ms") # 경로 확인 필요
 
 # ⭐️ 화살표 길이 스케일 (작을수록 화살표가 짧아짐)
 V_SCALE = 0.5

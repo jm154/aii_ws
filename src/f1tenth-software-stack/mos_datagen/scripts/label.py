@@ -9,23 +9,25 @@ import logging
 import scipy.ndimage
 from sklearn.neighbors import KDTree
 from sklearn.cluster import DBSCAN
+from collections import deque
 
 # ---------------- CONFIG ----------------
 CFG = {
     "MAP_YAML_PATH": "/home/ugrp/aii_ws/src/f1tenth_gym_ros/maps/E1_out2_obs24.yaml",
-    "ORIGINAL_NPZ_DIR": "../f1tenth_dataset",
-    "OUTPUT_NPZ_DIR": "../dataset_vel_label",
+    "ORIGINAL_NPZ_DIR": "../dataset", 
+    "OUTPUT_NPZ_DIR": "../dataset_l",
     "NUM_BEAMS": 1080,
-    "LIDAR_FOV": 4.71238898,   
+    "LIDAR_FOV": 4.71238898,    
     "CLUSTER_EPS": 0.5,
     "CLUSTER_MIN_SAMPLES": 3,
-    "BALLOON_RADIUS": 0.1,      
+    "BALLOON_RADIUS": 0.3,       
     "SEGMENT_OVERLAP_FRAC": 0.2, 
-    "MATCH_DISTANCE_SEGMENT": 1.0,  
+    "MATCH_DISTANCE_SEGMENT": 1.0,   
     "VEL_MATCH_DIST_MAX": 1.0, 
     "NEW_SEGMENT_DYNAMIC_ONLY_FIRST": True, 
     "DILATION_PIXELS": 9,
-    "DT_DEFAULT": 0.004
+    "DT_DEFAULT": 0.04,          
+    "FRAME_SKIP": 10             
 }
 # ----------------------------------------
 
@@ -66,12 +68,16 @@ class Labeler:
         self.load_map(cfg["MAP_YAML_PATH"], cfg["DILATION_PIXELS"])
         self.num_beams = cfg["NUM_BEAMS"]
         self.angles = np.linspace(-cfg["LIDAR_FOV"]/2, cfg["LIDAR_FOV"]/2, self.num_beams)
-        self.prev_points_world = None
-        self.prev_valid_beam_idxs = None
+        
+        self.history_buffer = deque(maxlen=cfg["FRAME_SKIP"] + 1)
+        
         self.prev_timestamp = None
-        self.prev_segments = {}
+        self.prev_segments = {} 
         self.next_segment_gid = 1
         self.frame_counter = 0
+        
+        self.prev_points_world = None
+        self.prev_valid_beam_idxs = None
 
     def load_map(self, map_yaml_path, dilation_pixels):
         with open(map_yaml_path, 'r') as f:
@@ -126,22 +132,31 @@ class Labeler:
             with np.load(npz_path, allow_pickle=True) as d:
                 ranges = d['ranges']
                 ego_pose = d['ego_pose']
+                timestamps = d.get('timestamps', None)
         except Exception:
             return
-        if len(ranges) == 0:
-            return
-        last_idx = len(ranges) - 1
-        last_ranges = ranges[last_idx]
-        last_pose = ego_pose[last_idx]
-        pts_local, valid_mask = self.scan_to_local(last_ranges)
-        pts_world = self.local_to_world(pts_local, last_pose)
-        if pts_world.shape[0] > 0:
-            beam_idxs = np.where(valid_mask)[0]
-            self.prev_points_world = pts_world.copy()
-            self.prev_valid_beam_idxs = beam_idxs.copy()
-            gid = self.next_segment_gid; self.next_segment_gid += 1
-            self.prev_segments[gid] = {'points': pts_world.copy(), 'centroid': pts_world.mean(axis=0), 'last_seen': self.frame_counter}
-            logging.info(f"Seeded prev points and prev_segment gid={gid} from {npz_path} (N={len(pts_world)})")
+        
+        N = len(ranges)
+        if N == 0: return
+
+        start_idx = max(0, N - self.cfg["FRAME_SKIP"])
+        for i in range(start_idx, N):
+            last_ranges = ranges[i]
+            last_pose = ego_pose[i]
+            ts = timestamps[i] if timestamps is not None else None
+            
+            pts_local, valid_mask = self.scan_to_local(last_ranges)
+            pts_world = self.local_to_world(pts_local, last_pose)
+            
+            self.history_buffer.append({
+                'pts_world': pts_world,
+                'valid_mask': valid_mask, 
+                'ts': ts
+            })
+
+        self.prev_points_world = self.history_buffer[-1]['pts_world']
+        self.prev_timestamp = self.history_buffer[-1]['ts']
+        logging.info(f"Seeded history buffer with {len(self.history_buffer)} frames from {npz_path}")
 
     def process_npz_file(self, in_path, out_path):
         logging.info(f"Processing: {in_path} -> {out_path}")
@@ -176,6 +191,7 @@ class Labeler:
             pts_local, valid_mask = self.scan_to_local(ranges)
             beam_idxs = np.where(valid_mask)[0]
             N = pts_local.shape[0]
+            
             if N == 0:
                 labels_out[t,:] = 0
                 vel_out[t,:,:] = np.nan
@@ -188,108 +204,92 @@ class Labeler:
 
             pts_world = self.local_to_world(pts_local, ego_pose)
 
-            # 1) Balloon check against previous points
-            # (이 결과는 나중에 New 판단에 쓰이지만, 지금 클러스터 분할에도 활용합니다)
+            # --- New Point 판별 (History 기반) ---
             is_within_balloon = np.zeros(N, dtype=bool)
-            if (self.prev_points_world is not None) and (self.prev_points_world.shape[0] > 0):
-                tree_prev = KDTree(self.prev_points_world)
-                dists_prev, _ = tree_prev.query(pts_world, k=1)
-                is_within_balloon = (dists_prev.flatten() <= CFG["BALLOON_RADIUS"])
-            else:
-                is_within_balloon[:] = False
             
-            # Balloon check 실패한 점들 = 잠재적 New 점들
+            if len(self.history_buffer) >= self.cfg["FRAME_SKIP"]:
+                pts_compare_world = self.history_buffer[0]['pts_world']
+                
+                if pts_compare_world.shape[0] > 0:
+                    tree_prev = KDTree(pts_compare_world)
+                    dists_prev, _ = tree_prev.query(pts_world, k=1)
+                    is_within_balloon = (dists_prev.flatten() <= CFG["BALLOON_RADIUS"])
+                else:
+                    is_within_balloon[:] = False
+            else:
+                is_within_balloon[:] = True
+            
             is_temp_new = ~is_within_balloon
 
-            # 2) cluster current points in world
+            # --- DBSCAN & Segmentation ---
             seg_labels = DBSCAN(eps=CFG["CLUSTER_EPS"], min_samples=CFG["CLUSTER_MIN_SAMPLES"]).fit_predict(pts_world)
             unique_segs = np.unique(seg_labels)
 
-            # ----------------------------------------------------------------
-            # ⭐️ [핵심 수정] 클러스터 쪼개기 (New와 Not-New가 섞여있으면 분리)
-            # ----------------------------------------------------------------
             max_gid = np.max(unique_segs) if len(unique_segs) > 0 else 0
             new_seg_labels = seg_labels.copy()
             
             for seg in unique_segs:
                 if seg == -1: continue
-                
                 mask = (seg_labels == seg)
-                # 해당 클러스터 내에 New 점들과 Not-New 점들이 혼재하는지 확인
                 new_flags_in_seg = is_temp_new[mask]
                 
                 if np.any(new_flags_in_seg) and np.any(~new_flags_in_seg):
-                    # 섞여 있다면 New 점들만 골라서 새로운 ID 발급
                     idxs_new_in_seg = np.where(mask & is_temp_new)[0]
                     max_gid += 1
                     new_seg_labels[idxs_new_in_seg] = max_gid
             
-            # 업데이트된 라벨 적용
             seg_labels = new_seg_labels
             unique_segs = np.unique(seg_labels)
-            # ----------------------------------------------------------------
 
-            # compute per-seg world pts & centroid & dynamic flag
             seg_pts_world_map = {}
             seg_centroids = {}
             seg_is_dynamic = {}
             for seg in unique_segs:
                 idxs_local = np.where(seg_labels == seg)[0]
-                if len(idxs_local) == 0:
-                    continue
+                if len(idxs_local) == 0: continue
                 seg_pts = pts_world[idxs_local]
                 seg_pts_world_map[seg] = seg_pts
                 seg_centroids[seg] = seg_pts.mean(axis=0)
+                
                 free_mask = self.is_free_mask(seg_pts)
                 frac_free = float(np.sum(free_mask)) / float(len(idxs_local))
                 seg_is_dynamic[seg] = (frac_free >= 0.5)
 
-            # ===================== NEW: SEGMENT-OVERLAP MATCHING =====================
-            # Build list of previous segments (gids and their points)
+            # --- Segment Tracking (Overlapping) ---
             prev_gids = list(self.prev_segments.keys())
             prev_points_list = [self.prev_segments[g]['points'] for g in prev_gids] if len(prev_gids)>0 else []
-            # We'll compute overlap matrix: rows=current segs, cols=prev_gids
             cur_segs = [s for s in unique_segs]
             overlap_matrix = np.zeros((len(cur_segs), len(prev_gids)), dtype=float) if len(prev_gids)>0 else np.zeros((len(cur_segs),0))
+            
             for i_cur, seg in enumerate(cur_segs):
                 pts_cur = seg_pts_world_map.get(seg, np.zeros((0,2)))
-                if pts_cur.shape[0]==0:
-                    continue
+                if pts_cur.shape[0]==0: continue
                 for j_prev, pgid in enumerate(prev_gids):
                     pts_prev = prev_points_list[j_prev]
-                    if pts_prev.shape[0] == 0:
-                        overlap_matrix[i_cur, j_prev] = 0.0
-                        continue
-                    # KDTree from prev segment points
+                    if pts_prev.shape[0] == 0: continue
                     tree_pp = KDTree(pts_prev)
                     d, _ = tree_pp.query(pts_cur, k=1)
-                    # fraction of current points within balloon radius of prev segment points
                     frac = float(np.sum(d.flatten() <= CFG["BALLOON_RADIUS"])) / float(pts_cur.shape[0])
                     overlap_matrix[i_cur, j_prev] = frac
-            # Greedy matching
-            seg_gid_map = {}  # seg_label -> (gid, seen_before_bool)
+            
+            seg_gid_map = {}
             if overlap_matrix.size > 0:
                 I,J = np.where(overlap_matrix>0)
                 pairs = [(i,j, overlap_matrix[i,j]) for i,j in zip(I,J)]
                 pairs.sort(key=lambda x: x[2], reverse=True)
-                used_prev = set()
-                used_cur = set()
+                used_prev = set(); used_cur = set()
                 for i_cur, j_prev, frac in pairs:
-                    if frac < CFG["SEGMENT_OVERLAP_FRAC"]:
-                        continue
-                    if j_prev in used_prev or i_cur in used_cur:
-                        continue
+                    if frac < CFG["SEGMENT_OVERLAP_FRAC"]: continue
+                    if j_prev in used_prev or i_cur in used_cur: continue
                     cur_seg = cur_segs[i_cur]
                     matched_gid = prev_gids[j_prev]
-                    seg_gid_map[cur_seg] = (matched_gid, True)
+                    seg_gid_map[cur_seg] = (matched_gid, True) # True=Seen Before
                     used_prev.add(j_prev); used_cur.add(i_cur)
-                # Remaining unmatched current segments -> assign new gids
+                
                 for i_cur, seg in enumerate(cur_segs):
-                    if i_cur in used_cur:
-                        continue
-                    # new segment
+                    if i_cur in used_cur: continue
                     gid = self.next_segment_gid; self.next_segment_gid += 1
-                    seg_gid_map[seg] = (gid, False)
+                    seg_gid_map[seg] = (gid, False) # False=Not Seen
                     self.prev_segments[gid] = {'points': np.zeros((0,2)), 'centroid': seg_centroids.get(seg, np.array([np.nan,np.nan])), 'last_seen': self.frame_counter}
             else:
                 for seg in cur_segs:
@@ -297,7 +297,6 @@ class Labeler:
                     seg_gid_map[seg] = (gid, False)
                     self.prev_segments[gid] = {'points': np.zeros((0,2)), 'centroid': seg_centroids.get(seg, np.array([np.nan,np.nan])), 'last_seen': self.frame_counter}
 
-            # After matching, update prev_segments entries
             for seg in cur_segs:
                 gid, seen_before = seg_gid_map[seg]
                 seg_pts = seg_pts_world_map.get(seg, np.zeros((0,2)))
@@ -305,23 +304,27 @@ class Labeler:
                 self.prev_segments[gid]['centroid'] = seg_centroids.get(seg, np.array([np.nan,np.nan]))
                 self.prev_segments[gid]['last_seen'] = self.frame_counter
 
-            # ===================== END SEGMENT-OVERLAP MATCHING =====================
-
-            # 4) per-point "new" assignment combining balloon + dynamic-first rule
+            # ⭐️ [최종 라벨링 로직 수정됨]
             is_new_point = np.zeros(N, dtype=bool)
             for local_idx in range(N):
                 seg = seg_labels[local_idx]
                 gid, seen_before = seg_gid_map.get(seg, (None, False))
                 dynamic_seg = seg_is_dynamic.get(seg, False)
-                if dynamic_seg and (not seen_before) and CFG["NEW_SEGMENT_DYNAMIC_ONLY_FIRST"]:
-                    is_new_point[local_idx] = True
+                
+                # Dynamic Logic
+                if dynamic_seg:
+                    if (not seen_before) and CFG["NEW_SEGMENT_DYNAMIC_ONLY_FIRST"]:
+                        is_new_point[local_idx] = True # New Dynamic
+                    else:
+                        is_new_point[local_idx] = False # Existing Dynamic (Never New)
+                # Static Logic
                 else:
                     if not is_within_balloon[local_idx]:
-                        is_new_point[local_idx] = True
+                        is_new_point[local_idx] = True # Disoccluded Wall -> New
                     else:
-                        is_new_point[local_idx] = False
+                        is_new_point[local_idx] = False # Existing Wall
 
-            # 5) velocities
+            # --- 속도 및 저장 (기존 동일) ---
             rigid_vels = calculate_rigid_velocity(pts_local, ego_twist)
             vel_frame = np.full((BEAMS, 2), np.nan, dtype=float)
 
@@ -345,10 +348,9 @@ class Labeler:
                         if not np.any(np.isnan(v_in)):
                             vel_frame[beam_idx,:] = v_in
                             used = True
-                    except Exception:
-                        pass
-                if used:
-                    continue
+                    except Exception: pass
+                if used: continue
+
                 prev_idx = idxs_prev[k]
                 if (prev_idx >= 0) and (dists_to_prev[k] <= CFG["VEL_MATCH_DIST_MAX"]) and (dt > 1e-6):
                     p_prev = self.prev_points_world[prev_idx]
@@ -361,18 +363,18 @@ class Labeler:
                     v_rel_ego = rotate_world_to_body(v_rel_world, ego_yaw)
                     vel_frame[beam_idx,:] = v_rel_ego
                     continue
+                
                 vel_frame[beam_idx,:] = rigid_vels[k]
 
-            # 6) final labels
             labels_this = np.zeros(BEAMS, dtype=np.uint8)
             for k, beam_idx in enumerate(beam_idxs):
                 if is_new_point[k]:
-                    labels_this[beam_idx] = 2
+                    labels_this[beam_idx] = 2 # New
                 else:
                     if seg_is_dynamic.get(seg_labels[k], False):
-                        labels_this[beam_idx] = 1
+                        labels_this[beam_idx] = 1 # Dynamic
                     else:
-                        labels_this[beam_idx] = 0
+                        labels_this[beam_idx] = 0 # Static
 
             segid_full = np.full(BEAMS, -1, dtype=int)
             for k, beam_idx in enumerate(beam_idxs):
@@ -382,7 +384,11 @@ class Labeler:
             vel_out[t] = vel_frame
             segid_out[t] = segid_full
 
-            # update prev_points_world (global list) for ballooning next frame
+            self.history_buffer.append({
+                'pts_world': pts_world,
+                'ts': ts
+            })
+
             self.prev_points_world = pts_world.copy()
             self.prev_valid_beam_idxs = beam_idxs.copy()
             self.prev_timestamp = ts if ts is not None else (self.prev_timestamp + dt if self.prev_timestamp is not None else None)
@@ -400,16 +406,29 @@ class Labeler:
 
 def main():
     os.makedirs(CFG["OUTPUT_NPZ_DIR"], exist_ok=True)
-    files = sorted(glob.glob(os.path.join(CFG["ORIGINAL_NPZ_DIR"], "*.npz")))
-    if len(files) == 0:
-        logging.warning("No input files")
+    input_root = CFG["ORIGINAL_NPZ_DIR"]
+    all_files = sorted(glob.glob(os.path.join(input_root, "**", "*.npz"), recursive=True))
+    
+    if len(all_files) == 0:
+        logging.warning(f"No input files found in {input_root}")
         return
-    labeler = Labeler(CFG)
-    for i, f in enumerate(files):
-        if i > 0:
-            labeler.seed_prev_from_input_last(files[i-1])
-        out_path = os.path.join(CFG["OUTPUT_NPZ_DIR"], os.path.basename(f))
-        labeler.process_npz_file(f, out_path)
+
+    from collections import defaultdict
+    scenario_files = defaultdict(list)
+    for f in all_files:
+        parent_dir = os.path.dirname(f)
+        scenario_files[parent_dir].append(f)
+
+    for scenario_dir, files in scenario_files.items():
+        logging.info(f"--- Processing Scenario: {scenario_dir} ---")
+        labeler = Labeler(CFG)
+        files = sorted(files)
+        for i, f in enumerate(files):
+            if i > 0:
+                labeler.seed_prev_from_input_last(files[i-1])
+            rel_path = os.path.relpath(f, input_root)
+            out_path = os.path.join(CFG["OUTPUT_NPZ_DIR"], rel_path)
+            labeler.process_npz_file(f, out_path)
 
 if __name__ == "__main__":
     main()

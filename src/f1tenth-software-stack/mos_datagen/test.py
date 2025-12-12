@@ -3,337 +3,311 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.cluster import DBSCAN
-from sklearn.neighbors import KDTree
+import os
+import glob
+import sys
 import math
 import random
+from sklearn.cluster import DBSCAN
+from sklearn.neighbors import KDTree
+from matplotlib.lines import Line2D
 
-# ==========================================
-# 0. Configuration (설정)
-# ==========================================
-DATA_PATH = 'f1tenth_dataset/data_0000.npz'  # 경로 확인 필요
-MODEL_PATH = 'cluster_flow_net.pth'
+# --- 설정 ---
+DATA_DIR = os.path.expanduser("./dataset_l/5ms") # 경로 확인
+MODEL_PATH = "cluster_flow_net.pth"
+FRAME_SKIP = 10
+NUM_POINTS = 64
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ⭐️ 프레임 간격 설정 (몇 프레임 전 데이터와 비교할지) ⭐️
-FRAME_SKIP = 10  
-
-# 기본 DT (혹시 타임스탬프가 없을 때 대비용)
-DT_DEFAULT = 0.04 
-
-# LiDAR Sensor Specs
-FOV = 4.71238898
-NUM_BEAMS = 1080
-RANGE_LIMIT = 30.0
-
-# ==========================================
-# 1. Helper Functions
-# ==========================================
-def rotation_matrix(yaw):
-    c = math.cos(yaw)
-    s = math.sin(yaw)
-    return np.array([[c, -s], [s, c]])
-
-def rotate_world_to_body(vec_world, yaw):
-    R = rotation_matrix(yaw)
-    if vec_world.ndim == 1:
-        return R.T.dot(vec_world)
-    else:
-        return (R.T @ vec_world.T).T
-
-def wrap_angle(angle):
-    return (angle + np.pi) % (2 * np.pi) - np.pi
-
-# ==========================================
-# 2. Model Definition
-# ==========================================
+# --- Model Definition (속도 전용) ---
 class ClusterFlowNet(nn.Module):
     def __init__(self):
         super(ClusterFlowNet, self).__init__()
-        self.conv1 = nn.Conv1d(4, 64, 1)
-        self.bn1 = nn.BatchNorm1d(64)
-        self.conv2 = nn.Conv1d(64, 128, 1)
-        self.bn2 = nn.BatchNorm1d(128)
-        self.conv3 = nn.Conv1d(128, 256, 1)
-        self.bn3 = nn.BatchNorm1d(256)
-
+        in_channels = 4 
+        self.conv1 = nn.Conv1d(in_channels, 64, 1); self.bn1 = nn.BatchNorm1d(64)
+        self.conv2 = nn.Conv1d(64, 128, 1); self.bn2 = nn.BatchNorm1d(128)
+        self.conv3 = nn.Conv1d(128, 256, 1); self.bn3 = nn.BatchNorm1d(256)
+        
         self.ego_mlp = nn.Sequential(
             nn.Linear(4, 64), nn.BatchNorm1d(64), nn.ReLU(),
             nn.Linear(64, 128), nn.BatchNorm1d(128), nn.ReLU()
         )
-
-        self.fc1 = nn.Linear(640, 256)
-        self.bn4 = nn.BatchNorm1d(256)
-        self.fc2 = nn.Linear(256, 128)
-        self.bn5 = nn.BatchNorm1d(128)
-        self.fc3 = nn.Linear(128, 2)
+        self.fc1 = nn.Linear(640, 256); self.bn4 = nn.BatchNorm1d(256)
+        self.fc2 = nn.Linear(256, 128); self.bn5 = nn.BatchNorm1d(128)
+        self.fc3 = nn.Linear(128, 2) # Only Velocity
 
     def forward_one_branch(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = torch.max(x, 2, keepdim=False)[0]
+        x = F.relu(self.bn1(self.conv1(x))); x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x))); x = torch.max(x, 2, keepdim=False)[0] 
         return x
 
     def forward(self, curr_cluster, prev_patch, ego_vector, raw_ego_vel):
         feat_curr = self.forward_one_branch(curr_cluster)
         feat_prev = self.forward_one_branch(prev_patch)
-        feat_ego = self.ego_mlp(ego_vector)
-        combined = torch.cat([feat_curr, feat_prev, feat_ego], dim=1)
-        x = F.relu(self.bn4(self.fc1(combined)))
-        x = F.relu(self.bn5(self.fc2(x)))
-        
-        v_obj_pred = self.fc3(x)
+        feat_ego = self.ego_mlp(ego_vector) 
+        combined = torch.cat([feat_curr, feat_prev, feat_ego], dim=1) 
+        x = F.relu(self.bn4(self.fc1(combined))); x = F.relu(self.bn5(self.fc2(x)))
+        v_obj_pred = self.fc3(x) 
         pred_vel_relative = v_obj_pred - raw_ego_vel
-        return pred_vel_relative, v_obj_pred
+        return pred_vel_relative
 
-# ==========================================
-# 3. Offline Tester Class
-# ==========================================
-class MOSOfflineTester:
-    def __init__(self, data_path, model_path):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Loading data from {data_path}...")
-        
-        data = np.load(data_path)
-        self.ranges = data['ranges']
-        raw_poses = data['ego_pose']
-        self.times = data['timestamps']
-        
-        # Pose 전처리 (7D -> 3D 변환 포함)
-        if raw_poses.shape[1] == 7:
-            self.poses = self.convert_pose_7d_to_3d(raw_poses)
-        else:
-            self.poses = raw_poses
+# --- Helper Functions ---
+def wrap_angle(angle):
+    return (angle + np.pi) % (2 * np.pi) - np.pi
 
-        self.model = ClusterFlowNet().to(self.device)
-        try:
-            checkpoint = torch.load(model_path, map_location=self.device)
-            state_dict = checkpoint.get('model_state_dict', checkpoint)
-            new_state = {k.replace('module.', ''): v for k, v in state_dict.items()}
-            self.model.load_state_dict(new_state)
+def rotate_world_to_body(vec_world, yaw):
+    c = math.cos(yaw); s = math.sin(yaw)
+    x = vec_world[0] * c + vec_world[1] * s
+    y = -vec_world[0] * s + vec_world[1] * c
+    return np.array([x, y])
+
+class OfflineTester:
+    def __init__(self):
+        # 1. Model Load
+        self.model = ClusterFlowNet().to(DEVICE)
+        if os.path.exists(MODEL_PATH):
+            state = torch.load(MODEL_PATH, map_location=DEVICE)
+            # Remove 'module.' prefix if needed
+            new_state = {k.replace('module.', ''): v for k, v in state.items()}
+            # Remove unexpected keys (like segmentation head) for compatibility
+            filtered_state = {k: v for k, v in new_state.items() if k in self.model.state_dict()}
+            
+            self.model.load_state_dict(filtered_state, strict=False)
             self.model.eval()
-            print("Model loaded successfully.")
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            exit()
-
-        self.angles = np.linspace(-FOV/2, FOV/2, NUM_BEAMS)
-        self.angles_norm = self.angles / (FOV/2)
-        self.dbscan = DBSCAN(eps=0.5, min_samples=3)
-
-    def convert_pose_7d_to_3d(self, poses_7d):
-        x = poses_7d[:, 0]
-        y = poses_7d[:, 1]
-        qx, qy, qz, qw = poses_7d[:, 3], poses_7d[:, 4], poses_7d[:, 5], poses_7d[:, 6]
-        siny_cosp = 2.0 * (qw * qz + qx * qy)
-        cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-        yaw = np.arctan2(siny_cosp, cosy_cosp)
-        return np.stack([x, y, yaw], axis=1)
-
-    def polar_to_xy(self, ranges):
-        valid = (ranges > 0.01) & (ranges < RANGE_LIMIT)
-        x = ranges * np.cos(self.angles)
-        y = ranges * np.sin(self.angles)
-        return np.stack([x[valid], y[valid]], axis=1), valid, ranges[valid], self.angles_norm[valid]
-
-    def normalize_cluster(self, points, center, residuals, angles):
-        pts_centered = points - center
-        num_pts = len(pts_centered)
-        target_num = 64
-        if num_pts >= target_num:
-            choice = np.random.choice(num_pts, target_num, replace=False)
+            print(f"✅ Model loaded: {MODEL_PATH}")
         else:
-            choice = np.random.choice(num_pts, target_num, replace=True)
-        return pts_centered[choice], residuals[choice], angles[choice]
+            print(f"❌ Model not found: {MODEL_PATH}")
+            sys.exit()
 
-    def run_random_test(self):
-        # 1. 프레임 선택 (FRAME_SKIP 만큼의 여유 필요)
-        if len(self.ranges) <= FRAME_SKIP:
-            print("Not enough frames in data.")
-            return
-            
-        idx = random.randint(FRAME_SKIP, len(self.ranges) - 1)
-        prev_idx = idx - FRAME_SKIP # 10프레임 전
+        # 2. Data Load
+        self.files = sorted(glob.glob(os.path.join(DATA_DIR, "*.npz")))
+        if not self.files:
+            print(f"❌ No data found in {DATA_DIR}")
+            sys.exit()
         
-        print(f"\n--- Testing Frame Pair: {prev_idx} -> {idx} (Gap: {FRAME_SKIP}) ---")
+        print(f"📂 Found {len(self.files)} files.")
+        self.dbscan = DBSCAN(eps=0.5, min_samples=3)
+        self.fov = 4.71238898
+        self.num_beams = 1080
+        self.angles = np.linspace(-self.fov/2, self.fov/2, self.num_beams)
+        self.angles_norm = self.angles / (self.fov/2)
 
-        # 2. 데이터 추출
-        ranges_curr = self.ranges[idx]
-        ranges_prev = self.ranges[prev_idx] # 10프레임 전 데이터 사용
+        # 초기 설정
+        self.file_idx = 0
+        self.frame_idx = 10
+        self.load_file()
+
+        # 3. GUI Setup
+        self.fig, self.ax = plt.subplots(figsize=(10, 10))
+        self.fig.canvas.mpl_connect('key_press_event', self.on_key)
         
-        p_curr = self.poses[idx]
-        p_prev = self.poses[prev_idx]
-        
-        t_curr = self.times[idx]
-        t_prev = self.times[prev_idx]
-
-        # =========================================================
-        # ⚡️ [핵심] Pose 변화량으로 직접 속도 계산 (DT 고정)
-        # =========================================================
-        dt = t_curr - t_prev
-        
-        # 타임스탬프가 비정상이면 기본값 * 프레임 수로 추정
-        if dt <= 1e-6: 
-            dt = DT_DEFAULT * FRAME_SKIP
-            print(f"⚠️ Warning: dt is too small, using default {DT_DEFAULT} * {FRAME_SKIP} = {dt}s")
-
-        # Global Frame 이동량
-        dx_global = p_curr[0] - p_prev[0]
-        dy_global = p_curr[1] - p_prev[1]
-        dyaw = wrap_angle(p_curr[2] - p_prev[2])
-
-        # Rotation Matrix (World -> Prev Body Frame)
-        vec_world = np.array([dx_global, dy_global])
-        vec_local = rotate_world_to_body(vec_world, p_prev[2])
-        
-        dx_local = vec_local[0]
-        dy_local = vec_local[1]
-
-        # 속도 계산 (Local Frame)
-        vx_calc = dx_local / dt
-        vy_calc = dy_local / dt
-        omega_calc = dyaw / dt
-
-        print(f"[Calculated Info] dt: {dt:.5f}s")
-        print(f"[Calculated Info] Ego Velocity: vx={vx_calc:.3f}, vy={vy_calc:.3f}, w={omega_calc:.3f}")
-        
-        # 속도 튀는 경우 보정
-        if abs(vx_calc) > 15.0: 
-             print(f"⚠️ Velocity extremely high. Forcing DT based on {DT_DEFAULT}")
-             dt = DT_DEFAULT * FRAME_SKIP
-             vx_calc = dx_local / dt
-             vy_calc = dy_local / dt
-             omega_calc = dyaw / dt
-             print(f"[Re-Calculated] Ego Velocity: vx={vx_calc:.3f}, vy={vy_calc:.3f}")
-
-        # =========================================================
-
-        # 3. 모델 입력 및 잔차 계산 준비
-        c_c, s_c = math.cos(p_curr[2]), math.sin(p_curr[2])
-        H_c = np.array([[c_c, -s_c, p_curr[0]], [s_c, c_c, p_curr[1]], [0, 0, 1]])
-        c_p, s_p = math.cos(p_prev[2]), math.sin(p_prev[2])
-        H_p = np.array([[c_p, -s_p, p_prev[0]], [s_p, c_p, p_prev[1]], [0, 0, 1]])
-        H_rel = np.linalg.inv(H_c) @ H_p
-
-        # 이전 포인트 클라우드 투영 (Warping)
-        pts_prev_local, _, _, _ = self.polar_to_xy(ranges_prev)
-        # Local to Global
-        pts_prev_glob_x = pts_prev_local[:,0]*c_p - pts_prev_local[:,1]*s_p + p_prev[0]
-        pts_prev_glob_y = pts_prev_local[:,0]*s_p + pts_prev_local[:,1]*c_p + p_prev[1]
-        pts_prev_map = np.stack([pts_prev_glob_x, pts_prev_glob_y], axis=1)
-
-        ones = np.ones((len(pts_prev_local), 1))
-        pts_prev_homo = np.hstack([pts_prev_local, ones])
-        pts_prev_in_curr = (H_rel @ pts_prev_homo.T).T
-        
-        r_warped = np.sqrt(pts_prev_in_curr[:,0]**2 + pts_prev_in_curr[:,1]**2)
-        th_warped = np.arctan2(pts_prev_in_curr[:,1], pts_prev_in_curr[:,0])
-        
-        pred_ranges = np.full(NUM_BEAMS, np.inf)
-        angle_res = FOV / (NUM_BEAMS - 1)
-        beam_idxs = ((th_warped + FOV/2) / angle_res).round().astype(int)
-        valid_proj = (beam_idxs >= 0) & (beam_idxs < NUM_BEAMS)
-        
-        for i, dist in zip(beam_idxs[valid_proj], r_warped[valid_proj]):
-            if dist < pred_ranges[i]: pred_ranges[i] = dist
-            
-        residual_full = np.zeros_like(ranges_curr)
-        mask = (ranges_curr > 0.01) & (pred_ranges != np.inf)
-        residual_full[mask] = np.tanh(np.abs(ranges_curr[mask] - pred_ranges[mask]))
-
-        # 4. 클러스터링 및 배치 생성
-        pts_curr_local, valid_curr, _, ang_curr = self.polar_to_xy(ranges_curr)
-        residuals = residual_full[valid_curr]
-        labels = self.dbscan.fit_predict(pts_curr_local)
-        unique_labels = set(labels) - {-1}
-
-        curr_batch, prev_batch, centers = [], [], []
-        prev_tree = KDTree(pts_prev_map)
-        
-        pts_curr_glob_x = pts_curr_local[:,0]*c_c - pts_curr_local[:,1]*s_c + p_curr[0]
-        pts_curr_glob_y = pts_curr_local[:,0]*s_c + pts_curr_local[:,1]*c_c + p_curr[1]
-        pts_curr_map = np.stack([pts_curr_glob_x, pts_curr_glob_y], axis=1)
-
-        for label in unique_labels:
-            mask = (labels == label)
-            cluster_pts = pts_curr_local[mask]
-            
-            center_local = np.mean(cluster_pts, axis=0)
-            center_map = np.mean(pts_curr_map[mask], axis=0)
-            
-            idxs = prev_tree.query_radius([center_map], r=1.5)[0]
-            if len(idxs) > 5:
-                patch_map = pts_prev_map[idxs]
-                dx_p = patch_map[:,0] - p_curr[0]
-                dy_p = patch_map[:,1] - p_curr[1]
-                x_loc = dx_p*c_c + dy_p*s_c
-                y_loc = -dx_p*s_c + dy_p*c_c
-                patch_local = np.stack([x_loc, y_loc], axis=1)
-                patch_ang = np.arctan2(y_loc, x_loc) / (FOV/2)
-            else:
-                patch_local = cluster_pts
-                patch_ang = ang_curr[mask]
-
-            c_p, c_r, c_a = self.normalize_cluster(cluster_pts, center_local, residuals[mask], ang_curr[mask])
-            curr_feat = np.stack([c_p[:,0], c_p[:,1], c_r, c_a], axis=0)
-            p_p, _, p_a = self.normalize_cluster(patch_local, np.mean(patch_local, axis=0), np.zeros(len(patch_local)), patch_ang)
-            prev_feat = np.stack([p_p[:,0], p_p[:,1], np.zeros_like(p_a), p_a], axis=0)
-            
-            curr_batch.append(curr_feat)
-            prev_batch.append(prev_feat)
-            centers.append(center_local)
-
-        if not curr_batch:
-            print("No valid clusters found.")
-            return
-
-        # 5. 모델 추론
-        curr_tensor = torch.tensor(np.array(curr_batch), dtype=torch.float32).to(self.device)
-        prev_tensor = torch.tensor(np.array(prev_batch), dtype=torch.float32).to(self.device)
-        
-        # [입력 벡터 구성]
-        ego_vec = np.array([vx_calc/10.0, vy_calc/10.0, omega_calc, dt], dtype=np.float32)
-        ego_tensor = torch.tensor(ego_vec).unsqueeze(0).repeat(len(curr_batch), 1).to(self.device)
-        
-        raw_ego = torch.tensor(np.array([vx_calc, vy_calc]), dtype=torch.float32).unsqueeze(0).repeat(len(curr_batch), 1).to(self.device)
-        
-        with torch.no_grad():
-            rel_vel, abs_vel = self.model(curr_tensor, prev_tensor, ego_tensor, raw_ego)
-            
-        rel_vel = rel_vel.cpu().numpy()
-        abs_vel = abs_vel.cpu().numpy()
-
-        self.visualize_result(pts_curr_local, labels, centers, rel_vel, abs_vel, vx_calc, vy_calc)
-
-    def visualize_result(self, points, labels, centers, rel_vels, abs_vels, ego_vx, ego_vy):
-        plt.figure(figsize=(10, 10))
-        plt.title(f"MOS Verification (Ego: vx={ego_vx:.2f})")
-        
-        unique_labels = set(labels) - {-1}
-        for lbl in unique_labels:
-            mask = (labels == lbl)
-            plt.scatter(points[mask, 0], points[mask, 1], s=5, alpha=0.5)
-        
-        plt.scatter(points[labels == -1, 0], points[labels == -1, 1], s=1, c='gray', alpha=0.1)
-
-        # Ego Arrow (Red)
-        plt.arrow(0, 0, ego_vx, ego_vy, color='red', width=0.08, head_width=0.2, label='Ego Vel')
-
-        # Object Arrows (Green: Relative Only)
-        for i, (center, v_rel) in enumerate(zip(centers, rel_vels)):
-            # Green: Relative (Model Output)
-            plt.arrow(center[0], center[1], v_rel[0], v_rel[1], 
-                      color='green', width=0.04, head_width=0.15, alpha=0.8, label='Relative' if i==0 else "")
-            plt.text(center[0], center[1], f"Rel: ({v_rel[0]:.1f}, {v_rel[1]:.1f})", color='black', fontsize=8)
-
-        plt.xlabel("Robot X (m)")
-        plt.ylabel("Robot Y (m)")
-        plt.grid(True)
-        plt.axis('equal')
-        plt.legend(loc='upper right')
-        plt.plot(0, 0, 'k^', markersize=10)
+        self.run_inference()
         plt.show()
 
+    def load_file(self):
+        self.data = np.load(self.files[self.file_idx])
+        self.total_frames = len(self.data['ranges'])
+        self.filename = os.path.basename(self.files[self.file_idx])
+        print(f"📄 Loading File [{self.file_idx+1}/{len(self.files)}]: {self.filename} ({self.total_frames} frames)")
+
+    def on_key(self, event):
+        if event.key == 'right':
+            self.frame_idx = min(self.frame_idx + 1, self.total_frames - 1)
+            self.run_inference()
+        elif event.key == 'left':
+            self.frame_idx = max(self.frame_idx - 1, 10)
+            self.run_inference()
+        elif event.key == 'down':
+            self.file_idx = (self.file_idx + 1) % len(self.files)
+            self.frame_idx = 10
+            self.load_file()
+            self.run_inference()
+        elif event.key == 'up':
+            self.file_idx = (self.file_idx - 1) % len(self.files)
+            self.frame_idx = 10
+            self.load_file()
+            self.run_inference()
+        elif event.key == 'q':
+            plt.close()
+
+    def polar_to_xy(self, ranges):
+        valid = (ranges > 0.01) & (ranges < 30.0)
+        x = ranges[valid] * np.cos(self.angles[valid])
+        y = ranges[valid] * np.sin(self.angles[valid])
+        return np.stack([x, y], axis=1), valid
+
+    def normalize_cluster(self, points, center, residuals, angles):
+        pts = points - center
+        num = len(pts)
+        if num >= NUM_POINTS:
+            idx = np.random.choice(num, NUM_POINTS, replace=False)
+        else:
+            idx = np.random.choice(num, NUM_POINTS, replace=True)
+        return pts[idx], residuals[idx], angles[idx]
+
+    def run_inference(self):
+        t = self.frame_idx
+        t_prev = t - 10
+        
+        # Data Extraction
+        ranges = self.data['ranges'][t]
+        prev_ranges = self.data['ranges'][t_prev]
+        pose_curr = self.data['ego_pose'][t]
+        pose_prev = self.data['ego_pose'][t_prev]
+        
+        # GT (비교용)
+        labels_pt = self.data['labels'][t]
+        vel_pt = self.data['point_velocities'][t]
+
+        # Ego Motion Calc
+        if 'timestamps' in self.data:
+            dt = self.data['timestamps'][t] - self.data['timestamps'][t_prev]
+            if dt < 0.001: dt = 0.4
+        else:
+            dt = 0.4
+            
+        dx_g = pose_curr[0] - pose_prev[0]
+        dy_g = pose_curr[1] - pose_prev[1]
+        dyaw = wrap_angle(pose_curr[2] - pose_prev[2])
+        
+        vec_world = np.array([dx_g, dy_g])
+        vec_local = rotate_world_to_body(vec_world, pose_prev[2])
+        
+        vx = vec_local[0] / dt
+        vy = vec_local[1] / dt
+        wz = dyaw / dt
+        
+        ego_vec = np.array([vx/10.0, vy/10.0, wz, dt], dtype=np.float32)
+        raw_ego = np.array([vx, vy], dtype=np.float32)
+
+        # Preprocessing
+        valid = (ranges > 0.01) & (ranges < 30.0)
+        x = ranges[valid] * np.cos(self.angles[valid])
+        y = ranges[valid] * np.sin(self.angles[valid])
+        points_xy = np.stack([x, y], axis=1)
+        angles_valid = self.angles_norm[valid]
+        residuals = np.zeros(len(points_xy))
+
+        # Clustering
+        if len(points_xy) < 5: return
+        labels = self.dbscan.fit_predict(points_xy)
+        unique_labels = set(labels) - {-1}
+
+        curr_list, prev_list = [], []
+        centers = []
+        indices_list = []
+        cluster_gt_labels = []
+
+        # GT Labels for valid points
+        labels_valid = labels_pt[valid]
+        
+        # 유효한 포인트의 GT 속도
+        vel_valid = vel_pt[valid]
+
+        for l in unique_labels:
+            mask = (labels == l)
+            cluster = points_xy[mask]
+            center = np.mean(cluster, axis=0)
+            
+            # 클러스터의 대표 GT 라벨 (Static/Dynamic/New)
+            cls_votes = labels_valid[mask]
+            if len(cls_votes) > 0:
+                cluster_gt_labels.append(np.argmax(np.bincount(cls_votes)))
+            else:
+                cluster_gt_labels.append(0)
+
+            # Normalize
+            pts_norm, res_norm, ang_norm = self._normalize(cluster, center, residuals[mask], angles_valid[mask])
+            
+            curr_feat = np.stack([pts_norm[:,0], pts_norm[:,1], res_norm, ang_norm], axis=0)
+            prev_feat = curr_feat.copy(); prev_feat[2,:] = 0
+            
+            curr_list.append(curr_feat)
+            prev_list.append(prev_feat)
+            centers.append(center)
+            indices_list.append(mask)
+
+        # Inference
+        pred_vels = []
+
+        if len(curr_list) > 0:
+            b_curr = torch.tensor(np.array(curr_list), dtype=torch.float32).to(DEVICE)
+            b_prev = torch.tensor(np.array(prev_list), dtype=torch.float32).to(DEVICE)
+            b_ego = torch.tensor(ego_vec, dtype=torch.float32).unsqueeze(0).repeat(len(curr_list), 1).to(DEVICE)
+            b_raw = torch.tensor(raw_ego, dtype=torch.float32).unsqueeze(0).repeat(len(curr_list), 1).to(DEVICE)
+            
+            with torch.no_grad():
+                pred_vel = self.model(b_curr, b_prev, b_ego, b_raw)
+                pred_vels = pred_vel.cpu().numpy()
+
+        # Visualization
+        self.plot_result(points_xy, labels, vel_valid, centers, pred_vels, cluster_gt_labels, indices_list, vx, vy)
+
+    def _normalize(self, points, center, residuals, angles):
+        pts = points - center
+        num = len(pts)
+        if num >= NUM_POINTS:
+            idx = np.random.choice(num, NUM_POINTS, replace=False)
+        else:
+            idx = np.random.choice(num, NUM_POINTS, replace=True)
+        return pts[idx], residuals[idx], angles[idx]
+
+    def plot_result(self, points, labels, gt_vel, centers, pred_vels, gt_labels, indices_list, evx, evy):
+        self.ax.clear()
+        
+        # 1. 배경 노이즈 (검정)
+        clustered_mask = np.zeros(len(points), dtype=bool)
+        for m in indices_list: clustered_mask |= m
+        self.ax.scatter(points[~clustered_mask, 0], points[~clustered_mask, 1], s=1, c='black', alpha=0.1, label='Noise')
+
+        # 2. 클러스터별 그리기
+        for i, (center, vel, gt_cls) in enumerate(zip(centers, pred_vels, gt_labels)):
+            mask = indices_list[i]
+            pts = points[mask]
+            
+            # 클러스터 점 (파란색으로 통일 - 예측 클래스 없으므로)
+            self.ax.scatter(pts[:,0], pts[:,1], s=10, c='blue', alpha=0.3)
+
+            # --- 화살표 그리기 (속도 0.5 이상만) ---
+            speed = np.linalg.norm(vel)
+            if speed > 0.5:
+                # 🟢 Pred Vel
+                self.ax.quiver(center[0], center[1], vel[0], vel[1], color='green', 
+                               angles='xy', scale_units='xy', scale=1, width=0.015, alpha=0.9, 
+                               label='Pred Vel' if i==0 else "")
+                # P:값
+                self.ax.text(center[0], center[1]+0.5, f"P:{speed:.1f}", color='green', fontsize=9, fontweight='bold')
+            
+            # 🟡 GT Vel (비교용)
+            # New(2)가 아닌 경우에만 GT가 존재함
+            if gt_cls != 2:
+                gt_v_cluster = np.mean(gt_vel[mask], axis=0)
+                speed_gt = np.linalg.norm(gt_v_cluster)
+                self.ax.quiver(center[0], center[1], gt_v_cluster[0], gt_v_cluster[1], color='orange', 
+                               angles='xy', scale_units='xy', scale=1, width=0.01, alpha=0.6, 
+                               label='GT Vel' if i==0 else "")
+                # G:값
+                self.ax.text(center[0], center[1]-0.5, f"G:{speed_gt:.1f}", color='orange', fontsize=9)
+            
+            # GT 클래스 표시 (참고용)
+            cls_map = {0:'S', 1:'D', 2:'N'}
+            self.ax.text(center[0]-1.0, center[1], f"GT:{cls_map[gt_cls]}", color='black', fontsize=8)
+
+        self.ax.set_title(f"Velocity Test (Ego: {evx:.2f} m/s)")
+        self.ax.plot(0, 0, 'k^', markersize=15, label='Ego')
+        self.ax.grid(True)
+        self.ax.axis('equal')
+        self.ax.set_xlim(-15, 15)
+        self.ax.set_ylim(-15, 15)
+        
+        legend_elements = [
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', label='Cluster', markersize=10),
+            Line2D([0], [0], color='green', lw=2, label='Pred Vel'),
+            Line2D([0], [0], color='orange', lw=2, label='GT Vel'),
+        ]
+        self.ax.legend(handles=legend_elements, loc='upper right')
+        self.fig.canvas.draw()
+
 if __name__ == "__main__":
-    tester = MOSOfflineTester(DATA_PATH, MODEL_PATH)
+    tester = OfflineTester()
     tester.run_random_test()

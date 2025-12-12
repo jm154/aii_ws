@@ -5,6 +5,7 @@ from torch.utils.data import Dataset
 import torch
 import warnings
 import math
+import glob
 
 # ⭐️ [설정] 몇 프레임 전 데이터와 비교할지 설정
 FRAME_SKIP = 10 
@@ -21,14 +22,26 @@ def rotate_world_to_body(vec_world, yaw):
     y = -vec_world[0] * s + vec_world[1] * c
     return np.array([x, y])
 
+# ✅ [추가] Twist 적분 함수
+def integrate_twist(pose_prev, twist, dt):
+    """Twist를 이용하여 Pose를 한 스텝 적분합니다 (오일러 적분)."""
+    x, y, yaw = pose_prev
+    vx, vy, w = twist
+    
+    # Body Frame 속도를 World Frame으로 변환
+    dx_world = vx * np.cos(yaw) - vy * np.sin(yaw)
+    dy_world = vx * np.sin(yaw) + vy * np.cos(yaw)
+    
+    # 위치 및 자세 업데이트
+    x_new = x + dx_world * dt
+    y_new = y + dy_world * dt
+    yaw_new = wrap_angle(yaw + w * dt)
+    
+    return np.array([x_new, y_new, yaw_new])
+
 class ClusterDataset(Dataset):
     """
-    Returns per-sample:
-        input_tensor: (4, N) float32 -> [x, y, residual, angle_norm]
-        prev_input_tensor: (4, N) float32 -> [x, y, 0, angle_norm] (Interaction branch)
-        ego_vector: (4,) float32 -> [vx_norm, vy_norm, omega, dt] (Network Input)
-        raw_ego_vel: (2,) float32 -> [vx, vy] (m/s, with noise) (Physics Shortcut)
-        target_vel_tensor: (2,) float32 -> [vx, vy] (Ground Truth Object Velocity)
+    ... (주석 생략)
     """
 
     def __init__(self, root: str, split: str = "train", num_points: int = 64):
@@ -43,7 +56,7 @@ class ClusterDataset(Dataset):
         self.angles = np.linspace(-self.fov/2, self.fov/2, self.num_beams)
         self.angles_norm = self.angles / (self.fov/2)
 
-        self.files = sorted([os.path.join(root, f) for f in os.listdir(root) if f.endswith(".npz")])
+        self.files = sorted(glob.glob(os.path.join(root, "**", "*.npz"), recursive=True))
         self.index_map = []
         
         # 인덱싱 생성
@@ -61,6 +74,7 @@ class ClusterDataset(Dataset):
         return len(self.index_map)
 
     def _normalize_cluster(self, points, residuals, angles, center):
+        # ... (변경 없음)
         # 1. Centering
         pts_centered = points - center
         
@@ -77,6 +91,7 @@ class ClusterDataset(Dataset):
         return pts_centered[choice], residuals[choice], angles[choice]
 
     def _compute_residual(self, curr_ranges, prev_ranges, pose_curr, pose_prev):
+        # ... (이 함수는 pose_curr, pose_prev를 입력받아 Residual 계산, 내부 로직 변경 없음)
         def get_mat(p):
             x, y, th = p
             c, s = np.cos(th), np.sin(th)
@@ -137,7 +152,7 @@ class ClusterDataset(Dataset):
         with np.load(path, allow_pickle=True) as d:
             ranges_all = d['ranges']
             ego_pose_all = d['ego_pose']
-            # ego_twist_all = d['ego_twist'] # ⚠️ 사용 안 함 (직접 계산)
+            ego_twist_all = d['ego_twist'] # Twist 로드
             timestamps = d.get('timestamps', None)
             point_vels = d.get('point_velocities', None)
             seg_ids_all = d.get('segment_id_per_point', None)
@@ -147,39 +162,58 @@ class ClusterDataset(Dataset):
             prev_idx = frame_idx - FRAME_SKIP
             prev_ranges = np.array(ranges_all[prev_idx], dtype=float)
             
-            pose_curr = ego_pose_all[frame_idx]
-            pose_prev = ego_pose_all[prev_idx] 
-
-            # ---------------------------------------------------------
-            # ⚡️ [핵심] 추론 코드와 동일하게 속도 직접 계산 (Pose Diff)
-            # ---------------------------------------------------------
-            dt = 0.04 # 기본값 (250Hz * 10 = 0.04s 가정)
+            # ✅ 수정: Residual 계산에 사용할 Pose를 Twist 적분으로 대체하기 위해
+            #      Twist와 dt를 계산합니다. (Ego Vector 계산 로직 재사용)
+            dt = 0.04 
             if timestamps is not None:
-                dt = timestamps[frame_idx] - timestamps[prev_idx]
-            
-            # dt 안전장치
-            if dt <= 0.0001: dt = 0.04
+                dt_all = np.diff(timestamps)
+                # dt는 FRAME_SKIP 간격의 총 합이 필요합니다.
+                dt_total = timestamps[frame_idx] - timestamps[prev_idx]
+                if dt_total <= 0.0001: dt_total = 0.04
+                dt = dt_total
+            else:
+                dt_all = np.full(len(ranges_all) - 1, 0.04) # 기본 dt 
 
-            # Global Frame 이동량
-            dx_global = pose_curr[0] - pose_prev[0]
-            dy_global = pose_curr[1] - pose_prev[1]
-            dyaw = wrap_angle(pose_curr[2] - pose_prev[2])
-
-            # Rotation Matrix (World -> Prev Body Frame)
-            # 로봇이 10프레임 전 바라보던 방향 기준으로 이동량 분해
-            vec_world = np.array([dx_global, dy_global])
-            vec_local = rotate_world_to_body(vec_world, pose_prev[2])
-
-            vx_calc = vec_local[0] / dt
-            vy_calc = vec_local[1] / dt
-            w_calc = dyaw / dt
-            
-            # [덮어쓰기] 파일의 twist 대신 계산된 값 사용
-            twist_curr = np.array([vx_calc, vy_calc, w_calc])
             # ---------------------------------------------------------
+            # ⚡️ [핵심] Residual 계산에 사용할 Pose를 Twist 적분으로 재구성
+            # ---------------------------------------------------------
+            
+            # 1. 초기 Pose 설정 (Twist 적분의 기준점)
+            # Twist 적분은 누적 오차를 발생시키므로, 초기 Pose는 원본을 사용합니다.
+            pose_ref = ego_pose_all[prev_idx] 
+            
+            # 2. Twist 적분 실행 (ref_idx 부터 curr_idx까지)
+            poses_integrated = [pose_ref]
+            
+            # prev_idx는 이미 ego_pose_all[prev_idx]로 시작했으므로, 
+            # prev_idx 부터 frame_idx - 1 까지 순차 적분
+            for t in range(prev_idx, frame_idx):
+                twist = ego_twist_all[t]
+                
+                # 해당 프레임 간격 dt (t to t+1)
+                if timestamps is not None:
+                    try:
+                        step_dt = timestamps[t+1] - timestamps[t]
+                        if step_dt <= 0.0001: step_dt = 0.04
+                    except IndexError: # 마지막 프레임 처리 (이 로직에서는 발생하지 않아야 함)
+                        step_dt = 0.04
+                else:
+                    step_dt = 0.04
+                
+                new_pose = integrate_twist(poses_integrated[-1], twist, step_dt)
+                poses_integrated.append(new_pose)
 
-            # 1. Residual Calculation (10프레임 전과 비교)
-            residual_full = self._compute_residual(curr_ranges, prev_ranges, pose_curr, pose_prev)
+            # Twist 적분 결과 추출
+            pose_prev_twist_integrated = poses_integrated[0] # ego_pose_all[prev_idx]와 동일해야 함
+            pose_curr_twist_integrated = poses_integrated[-1]
+
+            # Residual 계산은 Twist 적분 Pose 사용
+            residual_full = self._compute_residual(curr_ranges, prev_ranges, 
+                                                   pose_curr_twist_integrated, pose_prev_twist_integrated)
+            
+            # Ego Vector 계산은 파일 twist 그대로 사용 (원래 로직 유지)
+            twist_curr = np.array(ego_twist_all[frame_idx], dtype=float)
+            # ---------------------------------------------------------
 
             # 2. Local Cartesian
             valid_mask = (curr_ranges > 0.01) & (curr_ranges < 30.0)
@@ -235,7 +269,7 @@ class ClusterDataset(Dataset):
             # Network Input (Normalized)
             norm_vx = sim_vx / 10.0
             norm_vy = sim_vy / 10.0
-            ego_vector = np.array([norm_vx, norm_vy, w_raw, dt], dtype=np.float32)
+            ego_vector = np.array([norm_vx, norm_vy, w_raw, dt], dtype=np.float32) 
             
             # Physics Shortcut Input (Original Scale)
             raw_ego_vel = np.array([sim_vx, sim_vy], dtype=np.float32)

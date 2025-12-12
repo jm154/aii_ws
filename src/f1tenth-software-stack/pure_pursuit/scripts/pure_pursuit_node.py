@@ -65,7 +65,7 @@ class MultiLanePurePursuit(Node):
         if self.is_real:
             self.ref_speed = csv_data[:, 5] * 0.6
         else:
-            self.ref_speed = 4.0
+            self.ref_speed = 4.5
         self.numWaypoints = self.waypoints.shape[0]
         self._generate_lanes()
         self.active_waypoints = self.lanes[self.current_lane_idx]
