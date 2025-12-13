@@ -13,12 +13,12 @@ from collections import deque
 
 # ---------------- CONFIG ----------------
 CFG = {
-    "MAP_YAML_PATH": "/home/ugrp/aii_ws/src/f1tenth_gym_ros/maps/E1_out2_obs24.yaml",
+    "MAP_YAML_PATH": "/home/ugrp/aii_ws/src/f1tenth_gym_ros/maps/E1_out2_obs25.yaml",
     "ORIGINAL_NPZ_DIR": "../dataset", 
-    "OUTPUT_NPZ_DIR": "../dataset_l",
+    "OUTPUT_NPZ_DIR": "../VALIDATION",
     "NUM_BEAMS": 1080,
     "LIDAR_FOV": 4.71238898,    
-    "CLUSTER_EPS": 0.5,
+    "CLUSTER_EPS": 0.2,
     "CLUSTER_MIN_SAMPLES": 3,
     "BALLOON_RADIUS": 0.3,       
     "SEGMENT_OVERLAP_FRAC": 0.2, 

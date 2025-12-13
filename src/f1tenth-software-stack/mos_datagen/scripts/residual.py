@@ -5,7 +5,7 @@ import glob
 import sys
 
 # -------- 설정 --------
-DATA_DIR = os.path.expanduser("../dataset_l/5ms")
+DATA_DIR = os.path.expanduser("../dataset_l/2.5ms")
 FRAME_STEP = 10
 NUM_BEAMS = 1080
 FOV = 4.71238898

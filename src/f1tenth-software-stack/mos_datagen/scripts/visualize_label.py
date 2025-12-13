@@ -8,13 +8,13 @@ from sklearn.cluster import DBSCAN
 from matplotlib import cm
 
 # ⭐️ 라벨링된 데이터 경로
-DATA_DIR = os.path.expanduser("../dataset_l/4ms") # 경로 확인 필요
+DATA_DIR = os.path.expanduser("../VALIDATION/validation") # 경로 확인 필요
 
 # ⭐️ 화살표 길이 스케일 (작을수록 화살표가 짧아짐)
 V_SCALE = 0.5
 
 # DBSCAN (세그먼트 재생성 시 사용)
-DBSCAN_EPS = 0.5
+DBSCAN_EPS = 0.2
 DBSCAN_MIN_SAMPLES = 3
 
 class LabelViewer:

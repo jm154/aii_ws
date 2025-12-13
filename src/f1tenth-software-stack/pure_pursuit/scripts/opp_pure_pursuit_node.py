@@ -22,7 +22,7 @@ class PurePursuit(Node):
         # ===== Parameters =====
         self.is_real = False
         self.map_name = 'E1_out2_refined'
-        self.L = 1.0
+        self.L = 0.8
         self.steering_gain = 0.5
         self.downsample_gap = 10
         self.max_sight = 8.0
@@ -213,8 +213,8 @@ class PurePursuit(Node):
         # Speed scaling if target lies on an arc
         target_idx = int(np.argmin(np.linalg.norm(self.track_waypoints - target, axis=1)))
         base_speed = self._speed_at_track_index(closest_idx)
-        random_scale = random.uniform(0.5, 2)
-        base_speed = 3.0 #base_speed * random_scale
+        random_scale = random.uniform(0.7, 1.7)
+        base_speed = base_speed * random_scale
         
         if len(self.is_arc_mask) == self.numTrackWaypoints and self.is_arc_mask[target_idx]:
             speed_cmd = base_speed * self.arc_speed_scale

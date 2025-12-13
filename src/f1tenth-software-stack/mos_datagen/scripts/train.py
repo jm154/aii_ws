@@ -5,113 +5,117 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader
+import cv2  # OpenCV 멀티스레딩 충돌 방지 (필수)
+from torch.utils.data import DataLoader, ConcatDataset
+from torch.optim.lr_scheduler import ReduceLROnPlateau # ⭐️ 스케줄러 추가
 
-# ⚠️ 주의: model.py와 dataset.py가 다음 조건을 만족해야 합니다.
-# 1. model.py: ClusterFlowNet의 forward가 3가지 출력(pred_rel, pred_abs, aux_ego_pred)을 반환
-# 2. dataset.py: ClusterDataset의 __init__에서 glob.glob을 사용하여 멀티 디렉토리를 지원
 from model import ClusterFlowNet
 from dataset import ClusterDataset
 
 # ---------------- hyperparams ----------------
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH_SIZE = 8
-NUM_EPOCHS = 50
-LR = 1e-4
-NUM_WORKERS = 4
 
-# ✅ 손실 가중치 설정
-STATIC_WEIGHT = 3.0  # 정적 객체 손실에 3배 가중치 부여 (Ego-Bias 제거 목적)
-AUX_EGO_WEIGHT = 0.5 # 보조 Ego-Motion 예측 손실 가중치
-VEL_THRESHOLD = 0.1  # 이 값 이하의 target_vel은 정적 객체로 간주 (m/s)
-L2_MIX_WEIGHT = 0.5  # ✅ Dynamic Loss에 L2를 혼합하는 비율
+# RTX 4070 Ti 최적화 설정
+BATCH_SIZE = 64     
+NUM_EPOCHS = 100    # 스케줄러 동작을 위해 넉넉하게 설정
+LR = 1e-4
+NUM_WORKERS = 4     
 # ---------------------------------------------
+
+# DataLoader worker 충돌 방지
+cv2.setNumThreads(0)
 
 def train_one_epoch(model, dataloader, optimizer, epoch):
     model.train()
     running_loss = 0.0
-    running_main_loss = 0.0
-    running_aux_loss = 0.0
     seen_steps = 0
 
+    # ==========================================
+    # ⚡️ Hyperparameters
+    # ==========================================
+    DYNAMIC_WEIGHT = 1.0      # 동적 객체 가중치
+    COSINE_WEIGHT = 0.5       # 방향 Loss 가중치 (MSE와 스케일 맞춤)
+    GRAD_CLIP_NORM = 2.0      # Gradient Clipping 임계값
+    # ==========================================
+
     for batch_idx, batch in enumerate(dataloader):
-        # 1. 데이터 로드 및 GPU 전송
         curr_in = batch[0].to(DEVICE)
         prev_in = batch[1].to(DEVICE)
         ego_vector = batch[2].to(DEVICE)
         raw_ego_vel = batch[3].to(DEVICE)
-        target_vel = batch[4].to(DEVICE) # GT Relative Velocity
+        target_vel = batch[4].to(DEVICE)
+        
+        # 라벨 로드 (없으면 자동 생성)
+        if len(batch) > 5:
+            labels = batch[5].to(DEVICE).view(-1)
+        else:
+            target_speed = torch.norm(target_vel, dim=1)
+            labels = (target_speed > 0.5).long()
 
         optimizer.zero_grad()
         
-        # 2. Forward 
-        pred_rel, pred_abs, aux_ego_pred = model(curr_in, prev_in, ego_vector, raw_ego_vel) 
+        # Forward
+        output = model(curr_in, prev_in, ego_vector, raw_ego_vel)
+        if isinstance(output, tuple):
+            pred_vel = output[0]
+        else:
+            pred_vel = output
 
-        # 3. 유효 샘플 마스크 (NaN 제거)
+        # 유효 데이터 마스킹
         mask = ~torch.isnan(target_vel).any(dim=1)
         if mask.sum() == 0: continue
             
-        valid_pred_rel = pred_rel[mask]
+        valid_pred = pred_vel[mask]
         valid_target = target_vel[mask]
-        valid_raw_ego = raw_ego_vel[mask] 
-        valid_ego_vector = ego_vector[mask]
-        
-        # --- A. 메인 손실 계산 (Weighted L1/L2 Hybrid Loss) ---
-        
-        # 4. 정적/동적 객체 마스크 정의
-        is_static_mask = (valid_target.norm(dim=1) < VEL_THRESHOLD).float()  
-        is_dynamic_mask = 1.0 - is_static_mask
+        valid_labels = labels[mask]
 
-        # 5a. L1 손실 (방향 및 크기에 대한 직접적인 페널티)
-        loss_L1_per_sample = F.l1_loss(valid_pred_rel, valid_target, reduction='none').mean(dim=1)
+        # -----------------------------------------------------------
+        # 🔥 Hybrid Loss: MSE + Cosine Direction
+        # -----------------------------------------------------------
         
-        # 5b. L2 손실 (동적 객체의 방향/크기 오차 강조를 위해 사용)
-        loss_L2_per_sample = F.mse_loss(valid_pred_rel, valid_target, reduction='none').mean(dim=1)
+        # 1. MSE Loss (기본: 크기 + 방향)
+        #    reduction='none'으로 샘플별 오차 계산
+        mse_per_sample = F.mse_loss(valid_pred, valid_target, reduction='none').mean(dim=1)
 
-        # 6. Hybrid 손실 정의
+        # 2. Cosine Similarity Loss (방향 집중)
+        # 
+        #    Target 속도가 너무 작으면(정지) 방향 정의 불가 -> 마스킹 필요
+        target_norm = torch.norm(valid_target, dim=1)
+        #    속도가 0.1 m/s 이상인 경우만 방향 오차 계산
+        direction_mask = (target_norm > 0.1)
         
-        # 정적 손실: L1 (가중치 적용, Ego-Bias 강력 억제)
-        static_loss_weighted = loss_L1_per_sample * is_static_mask * STATIC_WEIGHT
-        
-        # 동적 손실: L1 + L2 혼합 (방향 민감도를 높임)
-        # L1은 작은 오차에, L2는 큰 오차(방향 틀어짐)에 페널티를 부여
-        dynamic_hybrid_loss = (loss_L1_per_sample + L2_MIX_WEIGHT * loss_L2_per_sample) * is_dynamic_mask
-        
-        # 7. 최종 메인 손실
-        main_loss = (static_loss_weighted + dynamic_hybrid_loss).mean()
+        cosine_loss_per_sample = torch.zeros_like(mse_per_sample)
+        if direction_mask.sum() > 0:
+            # Cosine Sim은 1(일치) ~ -1(반대).
+            # Loss로 쓰려면: 1 - Cosine (0:일치, 2:반대)
+            cos_sim = F.cosine_similarity(valid_pred[direction_mask], valid_target[direction_mask], dim=1)
+            cosine_loss_per_sample[direction_mask] = 1.0 - cos_sim
 
-
-        # --- B. 보조 손실 계산 (Auxiliary Ego-Motion Loss) ---
+        # 3. 가중치 적용 (Total Loss)
+        #    Dynamic 객체에 가중치(5배) 적용
+        weights = torch.ones_like(mse_per_sample)
+        weights[valid_labels == 1] = DYNAMIC_WEIGHT
         
-        # 8. GT Ego-Motion 벡터 생성 [vx, vy, omega]
-        omega_gt = valid_ego_vector[:, 2].unsqueeze(1) 
-        raw_v_gt = valid_raw_ego 
-        ego_gt_vector = torch.cat([raw_v_gt, omega_gt], dim=1) 
-        
-        # 9. 보조 손실 (L1 사용)
-        aux_loss = F.l1_loss(aux_ego_pred[mask], ego_gt_vector)
-        
-        
-        # 10. 최종 손실 합산
-        loss = main_loss + AUX_EGO_WEIGHT * aux_loss
+        #    최종 결합: (MSE + 0.5 * Cosine) * Dynamic_Weight
+        total_loss_per_sample = mse_per_sample + (COSINE_WEIGHT * cosine_loss_per_sample)
+        loss = (total_loss_per_sample * weights).mean()
+        # -----------------------------------------------------------
 
         loss.backward()
+        
+        # ⚡️ Gradient Clipping (Loss Spike 방지)
+        # 
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=GRAD_CLIP_NORM)
+        
         optimizer.step()
 
         running_loss += loss.item()
-        running_main_loss += main_loss.item()
-        running_aux_loss += aux_loss.item()
         seen_steps += 1
 
         if batch_idx % 100 == 0:
-            print(f"[Epoch {epoch}] Batch {batch_idx}: Total Loss={loss.item():.4f}, "
-                  f"Main Hybrid Loss={main_loss.item():.4f}, Aux L1 Loss={aux_loss.item():.4f}")
+            print(f"[Epoch {epoch}] Batch {batch_idx}: Hybrid Loss={loss.item():.4f}")
 
     epoch_loss = (running_loss / seen_steps) if seen_steps > 0 else 0.0
-    epoch_main_loss = (running_main_loss / seen_steps) if seen_steps > 0 else 0.0
-    epoch_aux_loss = (running_aux_loss / seen_steps) if seen_steps > 0 else 0.0
-    
-    print(f"Epoch {epoch} Metrics: Avg Main Hybrid Loss={epoch_main_loss:.6f}, Avg Aux L1 Loss={epoch_aux_loss:.6f}")
     return epoch_loss
 
 def main():
@@ -124,30 +128,71 @@ def main():
     args = parser.parse_args()
 
     print(f"Loading data from {args.data_root}...")
-    train_dataset = ClusterDataset(root=args.data_root, split="train", num_points=64)
+    print(f"Settings: Batch={args.batch_size}, Workers={args.num_workers}, Device={DEVICE}")
+    print("Optimization: Label-Based Weight x3 + LR Scheduler Active")
     
-    if len(train_dataset) == 0:
-         print("[❌ 오류] 데이터셋에 유효한 샘플이 없습니다. 경로와 파일 구조를 확인하세요.")
-         return
+    # 여러 시나리오(하위 디렉토리) 자동 병합 로직
+    if os.path.exists(args.data_root):
+        subdirs = [os.path.join(args.data_root, d) for d in os.listdir(args.data_root) if os.path.isdir(os.path.join(args.data_root, d))]
+    else:
+        subdirs = []
+    
+    datasets = []
+    if len(subdirs) > 0:
+        print(f"Found {len(subdirs)} scenarios. Merging...")
+        for d in subdirs:
+            try:
+                ds = ClusterDataset(root=d, split="train", num_points=64)
+                if len(ds) > 0:
+                    datasets.append(ds)
+                    print(f"  -> Loaded: {d} ({len(ds)} samples)")
+            except Exception as e:
+                print(f"  -> Skipping {d}: {e}")
+                
+        if len(datasets) > 0:
+            train_dataset = ConcatDataset(datasets)
+            print(f"Total Combined Samples: {len(train_dataset)}")
+        else:
+            print("  -> No valid datasets found in subdirectories. Trying root directly.")
+            train_dataset = ClusterDataset(root=args.data_root, split="train", num_points=64)
+    else:
+        train_dataset = ClusterDataset(root=args.data_root, split="train", num_points=64)
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
-                              num_workers=args.num_workers, pin_memory=True)
+    # DataLoader 생성
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=args.batch_size, 
+        shuffle=True, 
+        num_workers=args.num_workers, 
+        pin_memory=True,
+        drop_last=True 
+    )
     
     print(f"Initializing Model on {DEVICE}...")
     model = ClusterFlowNet().to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
+    # ⭐️ 스케줄러 정의: Loss가 5 epoch 동안 개선 안되면 LR을 절반(0.5)으로 줄임
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+
     print("Starting Training...")
     for epoch in range(1, args.epochs + 1):
         epoch_loss = train_one_epoch(model, train_loader, optimizer, epoch)
-        print(f"Epoch {epoch} Finished. Avg Total Loss: {epoch_loss:.6f}")
+        
+        # 스케줄러 업데이트
+        scheduler.step(epoch_loss)
+        
+        # 현재 LR 확인
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Epoch {epoch} Finished. Avg Loss: {epoch_loss:.6f} | LR: {current_lr:.2e}")
 
         if epoch % 5 == 0:
-            ckpt_path = f"cluster_flow_net_checkpoint_epoch_{epoch}.pth"
+            ckpt_path = f"checkpoint_epoch_{epoch}.pth"
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(), # 스케줄러 상태도 저장
             }, ckpt_path)
             print(f"Checkpoint saved: {ckpt_path}")
 

@@ -27,7 +27,7 @@ MAX_SPEED_LIMIT = 20.0
 # ----------------------------------------
 
 # ==========================================
-# 0. Helper Functions (변경 없음)
+# 0. Helper Functions
 # ==========================================
 def wrap_angle(angle):
     return (angle + np.pi) % (2 * np.pi) - np.pi
@@ -44,98 +44,38 @@ def rotate_world_to_body(vec_world, yaw):
     else:
         return (R.T @ vec_world.T).T
 
-def integrate_twist(pose_prev, twist, dt):
-    """Twist를 이용하여 Pose를 한 스텝 적분합니다."""
-    x, y, yaw = pose_prev
-    vx, vy, w = twist
-    
-    dx_world = vx * np.cos(yaw) - vy * np.sin(yaw)
-    dy_world = vx * np.sin(yaw) + vy * np.cos(yaw)
-    
-    x_new = x + dx_world * dt
-    y_new = y + dy_world * dt
-    yaw_new = wrap_angle(yaw + w * dt)
-    
-    return np.array([x_new, y_new, yaw_new])
-
 # ==========================================
-# 1. Model Definition (변경 없음)
+# 1. Model Definition
 # ==========================================
 class ClusterFlowNet(nn.Module):
     def __init__(self):
         super(ClusterFlowNet, self).__init__()
-        
-        # Input: (x, y, residual, angle_norm)
         in_channels = 4 
-        
-        # --- Point Feature Encoder (Shared) ---
-        self.conv1 = nn.Conv1d(in_channels, 64, 1)
-        self.bn1 = nn.BatchNorm1d(64)
-        self.conv2 = nn.Conv1d(64, 128, 1)
-        self.bn2 = nn.BatchNorm1d(128)
-        self.conv3 = nn.Conv1d(128, 256, 1)
-        self.bn3 = nn.BatchNorm1d(256)
-
-        # --- Ego-Motion Encoder (Input: vx, vy, omega, dt) ---
+        self.conv1 = nn.Conv1d(in_channels, 64, 1); self.bn1 = nn.BatchNorm1d(64)
+        self.conv2 = nn.Conv1d(64, 128, 1); self.bn2 = nn.BatchNorm1d(128)
+        self.conv3 = nn.Conv1d(128, 256, 1); self.bn3 = nn.BatchNorm1d(256)
         self.ego_mlp = nn.Sequential(
-            nn.Linear(4, 64),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.Linear(64, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU()
+            nn.Linear(4, 64), nn.BatchNorm1d(64), nn.ReLU(),
+            nn.Linear(64, 128), nn.BatchNorm1d(128), nn.ReLU()
         )
-
-        # --- Decoding (Combined size: 256 + 256 + 128 = 640) ---
-        self.fc1 = nn.Linear(640, 256)
-        self.bn4 = nn.BatchNorm1d(256)
-        self.fc2 = nn.Linear(256, 128)
-        self.bn5 = nn.BatchNorm1d(128)
-        
-        # 1. Main Head: Predict Absolute Object Velocity (V_obj_pred)
+        self.fc1 = nn.Linear(640, 256); self.bn4 = nn.BatchNorm1d(256)
+        self.fc2 = nn.Linear(256, 128); self.bn5 = nn.BatchNorm1d(128)
         self.fc3 = nn.Linear(128, 2) 
 
-        # 2. ✅ Auxiliary Head: Predict Ego-Motion (V_x, V_y, Omega)
-        # Goal: Make the combined features decouple Ego-motion features
-        self.aux_ego_head = nn.Sequential(
-            nn.Linear(640, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Linear(128, 3) # Output: [vx, vy, omega]
-        )
-
-        # Init Weights (Main Head only)
-        nn.init.normal_(self.fc3.weight, 0, 0.01)
-        nn.init.constant_(self.fc3.bias, 0)
-
     def forward_one_branch(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x))) 
-        x = torch.max(x, 2, keepdim=False)[0] # PointNet Global Feature Extraction
+        x = F.relu(self.bn1(self.conv1(x))); x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x))); x = torch.max(x, 2, keepdim=False)[0] 
         return x
 
     def forward(self, curr_cluster, prev_patch, ego_vector, raw_ego_vel):
         feat_curr = self.forward_one_branch(curr_cluster)
         feat_prev = self.forward_one_branch(prev_patch)
         feat_ego = self.ego_mlp(ego_vector) 
-        
-        # Feature Concatenation (Shared Feature Space)
         combined = torch.cat([feat_curr, feat_prev, feat_ego], dim=1) 
-        
-        # Shared Decoding layers
-        x = F.relu(self.bn4(self.fc1(combined)))
-        x = F.relu(self.bn5(self.fc2(x)))
-        
-        # --- Head 1: Main Velocity Prediction ---
+        x = F.relu(self.bn4(self.fc1(combined))); x = F.relu(self.bn5(self.fc2(x)))
         v_obj_pred = self.fc3(x) 
-        pred_vel_relative = v_obj_pred - raw_ego_vel # V_obj - V_ego_raw
-
-        # --- Head 2: Auxiliary Ego-Motion Prediction ---
-        aux_ego_pred = self.aux_ego_head(combined) # Predicts [V_x, V_y, Omega]
-        
-        # ✅ 3개의 출력을 반환하도록 수정
-        return pred_vel_relative, v_obj_pred, aux_ego_pred
+        pred_vel_relative = v_obj_pred - raw_ego_vel
+        return pred_vel_relative, v_obj_pred
 
 # ==========================================
 # 2. Inference Node
@@ -158,7 +98,7 @@ class MosInferNode(Node):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_points = 64
-        self.dbscan = DBSCAN(eps=0.5, min_samples=3, algorithm='kd_tree')
+        self.dbscan = DBSCAN(eps=0.1, min_samples=3, algorithm='kd_tree')
         self.num_beams = 1080
         self.fov = 4.71238898
         self.angles = np.linspace(-self.fov/2, self.fov/2, self.num_beams)
@@ -175,8 +115,9 @@ class MosInferNode(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         
+        # 마커 발행 주기 제어 변수 (250Hz -> 25Hz)
         self.marker_publish_counter = 0
-        self.marker_publish_skip = 1 
+        self.marker_publish_skip = 10 
 
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT, depth=1)
         
@@ -260,29 +201,33 @@ class MosInferNode(Node):
         current_time = Time.from_msg(scan_msg.header.stamp)
         current_sec = current_time.nanoseconds / 1e9
         
-        # ⭐️ 1. Pose/Twist 취득
+        # ⭐️ 1. Pose 취득 (Odom/Map)
         if self.latest_odom is None: return
+        
+        # 1a. Velocity Calculation Pose (Stable Odom)
         odom = self.latest_odom
-        
-        # Odom Pose (Residual 적분 기준점)
-        odom_pose = (odom.pose.pose.position.x, odom.pose.pose.position.y, self.get_yaw(odom.pose.pose.orientation))
-        
-        # Odom Twist (Ego Vector 및 Residual 적분에 사용)
-        vx_odom = odom.twist.twist.linear.x
-        vy_odom = odom.twist.twist.linear.y
-        w_odom = odom.twist.twist.angular.z
-        curr_twist = np.array([vx_odom, vy_odom, w_odom], dtype=np.float32)
+        v_tx = odom.pose.pose.position.x
+        v_ty = odom.pose.pose.position.y
+        v_yaw = self.get_yaw(odom.pose.pose.orientation)
+        curr_pose_v = (v_tx, v_ty, v_yaw) # Stable Pose for Velocity Diff
 
-        # 1b. Map Alignment Pose (TF Lookup for Global Correction - 지도 정렬용)
+        # 1b. Map Alignment Pose (TF Lookup for Global Correction)
         try:
-            trans = self.tf_buffer.lookup_transform('map', scan_msg.header.frame_id, rclpy.time.Time(), timeout=Duration(seconds=0.05))
+            # TF 요청: Time(0)을 사용해 버퍼의 가장 최신 변환을 요청
+            trans = self.tf_buffer.lookup_transform(
+                'map',  
+                scan_msg.header.frame_id, 
+                rclpy.time.Time(), 
+                timeout=Duration(seconds=0.05)
+            )
             map_tx = trans.transform.translation.x
             map_ty = trans.transform.translation.y
             map_yaw = self.get_yaw(trans.transform.rotation)
             curr_pose_map = (map_tx, map_ty, map_yaw)
-        except Exception:
-            self.get_logger().debug(f"TF Lookup failed. Using Odom pose for map alignment.")
-            curr_pose_map = odom_pose # TF 실패 시 Odom Pose 사용
+        except Exception as e:
+            # TF 실패 시, Odom Pose를 Map Pose로 임시 사용 (Local 시각화는 영향 없지만, Global 계산 정확도 저하)
+            self.get_logger().debug(f"TF Lookup failed (Latest stamp requested): {e}. Using Odom pose for map alignment.")
+            curr_pose_map = curr_pose_v
 
         curr_ranges = np.array(scan_msg.ranges)
 
@@ -293,58 +238,44 @@ class MosInferNode(Node):
         y_glob = curr_pts_local[:,0]*s_map + curr_pts_local[:,1]*c_map + curr_pose_map[1]
         curr_points_map = np.stack([x_glob, y_glob], axis=1)
 
-        # ⭐️ History 저장
+        # ⭐️ History 저장 (250Hz 속도로 Deque 채움)
         self.history.append({
             'ranges': curr_ranges,
-            'pose_ref': odom_pose, # Odom Pose를 Residual 적분의 기준점으로 사용
-            'twist': curr_twist,   # Twist 정보를 저장
-            'map_pose': curr_pose_map, # 시각화 및 클러스터링 변환용
+            'pose': curr_pose_v,       
+            'map_pose': curr_pose_map, 
             'time': current_sec,
             'points_map': curr_points_map 
         })
 
-        # 데이터가 덜 쌓였으면 대기
+        # 데이터가 덜 쌓였으면 대기 (10프레임이 찼을 때만 처리)
         if len(self.history) <= FRAME_SKIP: return
 
         # ⭐️ 10프레임 전 데이터와 비교
         prev_data = self.history[0]  
-        prev_pose_ref = prev_data['pose_ref'] # 적분 시작 pose
+        prev_pose_v = prev_data['pose']      
+        prev_pose_map = prev_data['map_pose'] 
         prev_ranges = prev_data['ranges']
         prev_points_map = prev_data['points_map']
         prev_time = prev_data['time']
 
-        # ⭐️ Twist 적분으로 Pose 재구성 (Residual 계산을 위해)
-        dt = current_sec - prev_time # Total time difference (Should be ~0.04s)
-        
-        # dt 폴백 로직
+        # ⭐️ 속도 역산 (Odom Pose Diff 사용)
+        dt = current_sec - prev_time # Actual time difference (Should be ~0.04s)
+        # ⚠️ dt 폴백 로직 수정 (0.04s로 설정)
         if dt < 0.001: dt = TARGET_DT
         
-        # Twist 적분 실행: prev_idx (history[0])부터 current (history[-1])까지
-        poses_integrated = [prev_pose_ref] # 시작점은 prev_pose_ref
-        
-        for i in range(FRAME_SKIP):
-            twist = self.history[i]['twist']
-            
-            # 이전 스텝과의 시간 차이 (t to t+1)
-            next_time = self.history[i+1]['time']
-            current_t = self.history[i]['time']
-            step_dt = next_time - current_t
-            if step_dt <= 0.0001: step_dt = TARGET_DT / FRAME_SKIP # 0.04s / 10 = 0.004s
+        dx_global = curr_pose_v[0] - prev_pose_v[0] 
+        dy_global = curr_pose_v[1] - prev_pose_v[1]
+        dyaw = wrap_angle(curr_pose_v[2] - prev_pose_v[2])
 
-            new_pose = integrate_twist(poses_integrated[-1], twist, step_dt)
-            poses_integrated.append(new_pose)
+        vec_world = np.array([dx_global, dy_global])
+        vec_local = rotate_world_to_body(vec_world, prev_pose_v[2])
 
-        # Twist 적분 결과 추출
-        pose_prev_integrated = poses_integrated[0] # prev_pose_ref와 동일
-        pose_curr_integrated = poses_integrated[-1] # Twist 기반 추정된 현재 pose
+        vx_calc = vec_local[0] / dt
+        vy_calc = vec_local[1] / dt
+        omega_calc = dyaw / dt
 
-        # ⭐️ Ego Vector (Twist 기반)
-        vx_calc = curr_twist[0]
-        vy_calc = curr_twist[1]
-        omega_calc = curr_twist[2]
-        
-        # 속도 튐 방지 및 이동 평균 (Twist 값에 적용)
-        if abs(vx_calc) > MAX_SPEED_LIMIT or abs(vy_calc) > MAX_SPEED_LIMIT:
+        # 속도 튐 방지
+        if abs(vx_calc) > MAX_SPEED_LIMIT:
             if len(self.vel_history) > 0:
                 vx_calc = self.vel_history[-1][0]
                 vy_calc = self.vel_history[-1][1]
@@ -361,16 +292,15 @@ class MosInferNode(Node):
         ego_vector_np = np.array([norm_vx, norm_vy, omega_calc, dt], dtype=np.float32)
         raw_ego_vel_np = np.array([vx_final, vy_final], dtype=np.float32)
 
-        # Residual (Twist 적분 Pose 사용)
-        residual_full = self.compute_residual(curr_ranges, prev_ranges, 
-                                              pose_curr_integrated, pose_prev_integrated)
+        # Residual (Map Pose Diff 사용)
+        residual_full = self.compute_residual(curr_ranges, prev_ranges, curr_pose_map, prev_pose_map)
 
         # Cluster data preparation
         curr_pts_local, valid_mask = self.polar_to_xy(curr_ranges)
         if len(curr_pts_local) < 10: return
         curr_residuals = residual_full[valid_mask]
         curr_angles_norm = self.angles_norm[valid_mask]
-        
+
         labels = self.dbscan.fit_predict(curr_pts_local)
         unique_labels = set(labels)
         if -1 in unique_labels: unique_labels.remove(-1)
@@ -379,7 +309,7 @@ class MosInferNode(Node):
 
         curr_batch_list = []; prev_batch_list = []; cluster_centers = []; valid_label_list = []
         
-        prev_tree = KDTree(prev_points_map) 
+        prev_tree = KDTree(prev_points_map)
 
         c, s = math.cos(curr_pose_map[2]), math.sin(curr_pose_map[2])
 
@@ -388,7 +318,7 @@ class MosInferNode(Node):
             if np.sum(mask) < 5: continue
 
             cluster_local = curr_pts_local[mask]
-            cluster_res = curr_residuals[mask]
+            cluster_res = curr_residuals[mask] # FIX: cluster_res 할당
             cluster_ang = curr_angles_norm[mask]
             center_local = np.mean(cluster_local, axis=0)
             
@@ -432,17 +362,17 @@ class MosInferNode(Node):
             raw_ego_tensor = torch.tensor(raw_ego_vel_np, dtype=torch.float32).unsqueeze(0).repeat(B, 1).to(self.device)
 
             with torch.no_grad():
-                # ✅ 수정: 모델이 3개의 출력을 반환한다고 가정하고, 필요한 1개(pred_rel)만 추출
-                pred_rel, _, _ = self.model(curr_tensor, prev_tensor, ego_tensor, raw_ego_tensor) 
+                pred_rel, _ = self.model(curr_tensor, prev_tensor, ego_tensor, raw_ego_tensor)
                 velocities = pred_rel.cpu().numpy()
 
-        # ⭐️ 마커 발행 주기 제어 로직
+        # ⭐️ 마커 발행 주기 제어 로직 (25Hz로 제한)
         self.marker_publish_counter += 1
         if len(curr_batch_list) > 0 and self.marker_publish_counter >= self.marker_publish_skip:
             self.marker_publish_counter = 0
             
             viz_header = scan_msg.header
             viz_header.stamp = self.get_clock().now().to_msg() 
+            # ⭐️ 시각화 프레임을 Local (라이다 센서) 프레임으로 설정하여 TF 에러 회피
             viz_header.frame_id = scan_msg.header.frame_id 
 
             # Local 좌표계 데이터만 전달
@@ -450,6 +380,7 @@ class MosInferNode(Node):
 
 
     def publish_markers(self, header, points, labels, centers, velocities, valid_labels):
+        # ⚠️ 이 함수는 Local 좌표계(header.frame_id 기준)로만 마커를 발행합니다.
         markers = MarkerArray()
 
         # Clusters (Local Viz)
@@ -460,6 +391,7 @@ class MosInferNode(Node):
         pts_marker.lifetime = Duration(seconds=0.15).to_msg()
         
         for i, pt in enumerate(points):
+            # Local 좌표를 그대로 사용
             p = Point(x=float(pt[0]), y=float(pt[1]), z=0.0) 
             label = labels[i]
             c_rgba = ColorRGBA(a=1.0)
@@ -478,6 +410,7 @@ class MosInferNode(Node):
             speed_rel = np.linalg.norm(v_rel)
             if speed_rel < 0.5: continue 
             
+            # Local Position과 Local Velocity를 그대로 사용하여 화살표 생성
             cx_l = center[0]
             cy_l = center[1]
             vx_l = v_rel[0]

@@ -29,7 +29,7 @@ bridge:
     scan_beams: 1080
 
     # map parameters (사용자 설정 유지)
-    map_path: '/sim_ws/src/f1tenth_gym_ros/maps/E1_out2_obs24'
+    map_path: '/sim_ws/src/f1tenth_gym_ros/maps/E1_out2_obs25'
     map_img_ext: '.pgm'
 
     # ego starting pose on map (사용자 설정 유지)

@@ -26,7 +26,7 @@ class MultiLanePurePursuit(Node):
         self.steering_limit = 0.35  # radians
 
         # Speed-dependent lookahead
-        self.lookahead_norm = 2.0 # Lookahead for normal speed
+        self.lookahead_norm = 1.3 # Lookahead for normal speed
         self.lookahead_slow = 1.8 # Lookahead for decelerated speed
         self.wheelbase = self.lookahead_norm  # [m]
 
@@ -65,7 +65,7 @@ class MultiLanePurePursuit(Node):
         if self.is_real:
             self.ref_speed = csv_data[:, 5] * 0.6
         else:
-            self.ref_speed = 4.5
+            self.ref_speed = 4.2
         self.numWaypoints = self.waypoints.shape[0]
         self._generate_lanes()
         self.active_waypoints = self.lanes[self.current_lane_idx]
