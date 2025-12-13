@@ -30,7 +30,7 @@ def evaluate(model, dataloader):
     static_gts = []
     dynamic_gts = []
 
-    print("🚀 검증 시작...")
+    print("🚀 검증 시작 (정지한 Dynamic 객체 제외)...")
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="Inference")):
             # 1. 데이터 언패킹
@@ -71,7 +71,6 @@ def evaluate(model, dataloader):
             gt_abs = valid_target_rel + valid_raw_ego
             
             # 5. 속도 및 오차 계산 (L2 Norm)
-            # shape: [N]
             speed_error = torch.norm(pred_abs - gt_abs, dim=1) # 오차
             pred_speed = torch.norm(pred_abs, dim=1)           # 예측 속력
             gt_speed = torch.norm(gt_abs, dim=1)               # 정답 속력
@@ -87,11 +86,16 @@ def evaluate(model, dataloader):
                 pred = pred_speed[i]
                 gt = gt_speed[i]
                 
-                if labels[i] > 0.5: # Dynamic
+                if labels[i] > 0.5: # Dynamic (라벨상 동적 객체)
+                    # ⭐️ [핵심 수정] GT 속도가 거의 0인(0.1 미만) 경우 통계에서 제외
+                    # "멈춰 있는 차" 때문에 그래프가 왜곡되는 것을 방지
+                    if gt < 0.1:
+                        continue
+
                     dynamic_errors.append(err)
                     dynamic_preds.append(pred)
                     dynamic_gts.append(gt)
-                else: # Static
+                else: # Static (벽, 기둥 등)
                     static_errors.append(err)
                     static_preds.append(pred)
                     static_gts.append(gt)
@@ -102,13 +106,13 @@ def evaluate(model, dataloader):
 
 def visualize_results(static_err, dynamic_err, static_preds, dynamic_preds, static_gts, dynamic_gts):
     print("\n" + "="*80)
-    print("📊 Validation Statistics (Absolute Velocity)")
+    print("📊 Validation Statistics (Moving Dynamic Objects Only)")
     print("="*80)
 
     # --- Static Statistics ---
     print(f"[Static Objects] (Count: {len(static_err)})")
     if len(static_err) > 0:
-        print(f"  - GT Speed Mean : {np.mean(static_gts):.4f} m/s (Should be ~0)")
+        print(f"  - GT Speed Mean : {np.mean(static_gts):.4f} m/s")
         print(f"  - Pred Speed Mean: {np.mean(static_preds):.4f} m/s")
         print(f"  - Speed Error Mean: {np.mean(static_err):.4f} m/s")
         print(f"  - Speed Error Std : {np.std(static_err):.4f} m/s")
@@ -118,7 +122,7 @@ def visualize_results(static_err, dynamic_err, static_preds, dynamic_preds, stat
     print("-" * 80)
 
     # --- Dynamic Statistics ---
-    print(f"[Dynamic Objects] (Count: {len(dynamic_err)})")
+    print(f"[Dynamic Objects (Moving > 0.1m/s)] (Count: {len(dynamic_err)})")
     if len(dynamic_err) > 0:
         print(f"  - GT Speed Mean : {np.mean(dynamic_gts):.4f} m/s")
         print(f"  - Pred Speed Mean: {np.mean(dynamic_preds):.4f} m/s")
@@ -146,12 +150,11 @@ def visualize_results(static_err, dynamic_err, static_preds, dynamic_preds, stat
     # 2. Dynamic: GT vs Pred Speed Distribution
     ax = axes[0, 1]
     if len(dynamic_gts) > 0:
-        # 동적 객체는 속도 범위가 넓으므로 적절히 bin 설정
         max_val = max(np.max(dynamic_gts), np.max(dynamic_preds))
         bins = np.linspace(0, max_val + 0.5, 50)
         ax.hist(dynamic_gts, bins=bins, alpha=0.5, label='GT Speed', color='gray', density=True)
         ax.hist(dynamic_preds, bins=bins, alpha=0.5, label='Pred Speed', color='crimson', density=True)
-        ax.set_title('Dynamic Objects: Speed Distribution\n(Target vs Predicted)', fontsize=14, fontweight='bold')
+        ax.set_title('Moving Dynamic Objects: Speed Distribution\n(Excluding Stopped Objects)', fontsize=14, fontweight='bold')
         ax.set_xlabel('Speed (m/s)')
         ax.set_ylabel('Density')
         ax.legend()
@@ -173,7 +176,7 @@ def visualize_results(static_err, dynamic_err, static_preds, dynamic_preds, stat
     if len(dynamic_err) > 0:
         ax.hist(dynamic_err, bins=50, color='crimson', alpha=0.7, edgecolor='black')
         ax.axvline(np.mean(dynamic_err), color='blue', linestyle='--', linewidth=2, label=f'Mean Error: {np.mean(dynamic_err):.2f}')
-        ax.set_title('Dynamic Objects: Error Distribution', fontsize=14, fontweight='bold')
+        ax.set_title('Moving Dynamic Objects: Error Distribution', fontsize=14, fontweight='bold')
         ax.set_xlabel('Absolute Velocity Error (m/s)')
         ax.set_ylabel('Count')
         ax.legend()
