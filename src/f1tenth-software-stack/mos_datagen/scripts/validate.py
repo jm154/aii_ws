@@ -30,7 +30,7 @@ def evaluate(model, dataloader):
     static_gts = []
     dynamic_gts = []
 
-    print("🚀 검증 시작 (정지한 Dynamic 객체 제외)...")
+    print("검증 시작 (정지한 Dynamic 객체 제외)...")
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="Inference")):
             # 1. 데이터 언패킹
@@ -87,7 +87,7 @@ def evaluate(model, dataloader):
                 gt = gt_speed[i]
                 
                 if labels[i] > 0.5: # Dynamic (라벨상 동적 객체)
-                    # ⭐️ [핵심 수정] GT 속도가 거의 0인(0.1 미만) 경우 통계에서 제외
+                    # [핵심 수정] GT 속도가 거의 0인(0.1 미만) 경우 통계에서 제외
                     # "멈춰 있는 차" 때문에 그래프가 왜곡되는 것을 방지
                     if gt < 0.1:
                         continue
@@ -106,7 +106,7 @@ def evaluate(model, dataloader):
 
 def visualize_results(static_err, dynamic_err, static_preds, dynamic_preds, static_gts, dynamic_gts):
     print("\n" + "="*80)
-    print("📊 Validation Statistics (Moving Dynamic Objects Only)")
+    print("Validation Statistics (Moving Dynamic Objects Only)")
     print("="*80)
 
     # --- Static Statistics ---
@@ -176,7 +176,7 @@ def visualize_results(static_err, dynamic_err, static_preds, dynamic_preds, stat
     if len(dynamic_err) > 0:
         ax.hist(dynamic_err, bins=50, color='crimson', alpha=0.7, edgecolor='black')
         ax.axvline(np.mean(dynamic_err), color='blue', linestyle='--', linewidth=2, label=f'Mean Error: {np.mean(dynamic_err):.2f}')
-        ax.set_title('Moving Dynamic Objects: Error Distribution', fontsize=14, fontweight='bold')
+        ax.set_title('Dynamic Objects: Error Distribution', fontsize=14, fontweight='bold')
         ax.set_xlabel('Absolute Velocity Error (m/s)')
         ax.set_ylabel('Count')
         ax.legend()
@@ -186,7 +186,7 @@ def visualize_results(static_err, dynamic_err, static_preds, dynamic_preds, stat
     
     save_path = "validation_analysis_full.png"
     plt.savefig(save_path)
-    print(f"\n📈 상세 분석 그래프 저장됨: {os.path.abspath(save_path)}")
+    print(f"\n 상세 분석 그래프 저장됨: {os.path.abspath(save_path)}")
     # plt.show() 
 
 def main():
@@ -201,33 +201,33 @@ def main():
 
     # 1. 데이터셋 로드
     if not os.path.exists(args.data_root):
-        print(f"❌ Error: Dataset path not found: {args.data_root}")
+        print(f"Error: Dataset path not found: {args.data_root}")
         return
 
-    print(f"📂 Loading validation data from: {args.data_root}")
+    print(f"Loading validation data from: {args.data_root}")
     val_dataset = ClusterDataset(root=args.data_root, split="val", num_points=64)
     
     if len(val_dataset) == 0:
-        print("❌ Error: Dataset is empty.")
+        print("Error: Dataset is empty.")
         return
 
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
 
     # 2. 모델 로드
     if not os.path.exists(args.checkpoint):
-        print(f"❌ Error: Checkpoint file not found: {args.checkpoint}")
+        print(f"Error: Checkpoint file not found: {args.checkpoint}")
         return
 
-    print(f"🤖 Loading model from: {args.checkpoint}")
+    print(f"Loading model from: {args.checkpoint}")
     model = ClusterFlowNet().to(DEVICE)
     
     try:
         checkpoint = torch.load(args.checkpoint, map_location=DEVICE)
         state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
         model.load_state_dict(state_dict)
-        print("✅ Checkpoint loaded successfully.")
+        print("Checkpoint loaded successfully.")
     except Exception as e:
-        print(f"❌ Error loading checkpoint: {e}")
+        print(f"Error loading checkpoint: {e}")
         return
 
     # 3. 평가 실행
