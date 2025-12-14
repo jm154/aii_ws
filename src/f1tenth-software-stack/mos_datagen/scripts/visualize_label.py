@@ -21,10 +21,10 @@ class LabelViewer:
     def __init__(self, data_dir):
         self.files = sorted(glob.glob(os.path.join(data_dir, "*.npz")))
         if not self.files:
-            print(f"❌ 경로에 .npz 파일이 없습니다: {data_dir}")
+            print(f"경로에 .npz 파일이 없습니다: {data_dir}")
             sys.exit(0)
 
-        print(f"📂 총 {len(self.files)}개의 파일을 찾았습니다.")
+        print(f"총 {len(self.files)}개의 파일을 찾았습니다.")
 
         self.file_idx = 0
         self.frame_idx = 0
